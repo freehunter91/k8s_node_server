@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kubernetes 통합 대시보드</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue.js 3 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        body {
+            font-family: 'Pretendard', sans-serif;
+        }
+        /* 기본 폰트 및 배경 설정 */
+        html, body {
+            background-color: #111827; /* gray-900 */
+            color: #E5E7EB; /* gray-200 */
+        }
+        /* 커스텀 애니메이션 */
+        @keyframes fade-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fade-in 0.3s ease-out forwards;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app" class="container mx-auto px-4 py-8">
+        
+        <!-- 헤더 -->
+        <header class="mb-8">
+            <h1 class="text-4xl font-bold text-center text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600">
+                Kubernetes 통합 대시보드
+            </h1>
+            <p class="text-center text-gray-400 mt-2">Rust & Vue.js 기반</p>
+        </header>
+
+        <!-- 로딩 및 오류 처리 -->
+        <div v-if="loading" class="text-center py-10">
+            <p class="text-xl text-gray-400">클러스터 정보를 불러오는 중...</p>
+        </div>
+        <div v-else-if="error" class="bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-6">
+            <p><span class="font-bold">오류:</span> {{ error }}</p>
+        </div>
+
+        <!-- 메인 컨텐츠 -->
+        <main v-else class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- 왼쪽: 클러스터 목록 및 검색 -->
+            <aside class="lg:col-span-1 bg-gray-800/50 p-6 rounded-xl border border-gray-700 self-start sticky top-8">
+                <h2 class="text-2xl font-semibold mb-4 border-b border-gray-600 pb-2">탐색</h2>
+                
+                <!-- 검색창 -->
+                <div class="mb-6">
+                    <input 
+                        type="text"
+                        v-model="searchTerm"
+                        placeholder="노드 또는 파드 이름 검색..."
+                        class="w-full bg-gray-700/50 text-white placeholder-gray-400 rounded-lg px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"
+                    >
+                </div>
+
+                <!-- 검색 결과 또는 클러스터 목록 -->
+                <div v-if="searchTerm">
+                    <h3 class="text-lg font-semibold text-gray-300 mb-2">검색 결과</h3>
+                    <ul class="space-y-2">
+                        <li v-for="item in searchResults" :key="item.type + item.name" @click="selectFromSearch(item)"
+                            class="p-3 rounded-lg cursor-pointer transition-colors hover:bg-gray-700/70">
+                            <p class="font-semibold" :class="item.type === 'node' ? 'text-cyan-400' : 'text-green-400'">{{ item.name }}</p>
+                            <p class="text-xs text-gray-400">{{ item.type }} @ {{ item.cluster_name }}</p>
+                        </li>
+                        <li v-if="searchResults.length === 0" class="text-center text-gray-400 p-4">
+                            검색 결과가 없습니다.
+                        </li>
+                    </ul>
+                </div>
+                <div v-else>
+                    <h3 class="text-lg font-semibold text-gray-300 mb-2">클러스터</h3>
+                    <ul class="space-y-2">
+                        <li v-for="cluster in allClusters" :key="cluster.name">
+                            <div @click="selectCluster(cluster)"
+                                class="block w-full text-left p-3 rounded-lg cursor-pointer transition-colors"
+                                :class="selectedItem && selectedItem.type === 'cluster' && selectedItem.data.name === cluster.name ? 'bg-cyan-600/30 text-white' : 'hover:bg-gray-700/70'">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-semibold">{{ cluster.name }}</span>
+                                    <span class="text-xs bg-gray-600 px-2 py-1 rounded-full">{{ cluster.node_count }} 노드</span>
+                                </div>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </aside>
+
+            <!-- 오른쪽: 상세 정보 뷰 (HTML 구조는 변경 없음) -->
+            <section class="lg:col-span-2">
+                <!-- ... (이전과 동일) ... -->
+                <div v-if="!selectedItem" class="flex items-center justify-center h-full bg-gray-800/50 rounded-xl border border-gray-700 p-8">
+                    <div class="text-center">
+                        <p class="text-2xl text-gray-400">왼쪽에서 항목을 선택하세요.</p>
+                    </div>
+                </div>
+                <div v-else-if="selectedItem.type === 'node'" class="bg-gray-800/50 p-6 rounded-xl border border-gray-700 animate-fade-in">
+                    <h3 class="text-3xl font-bold mb-1 text-cyan-400">{{ selectedItem.data.name }}</h3>
+                    <p class="text-sm text-gray-500 mb-4">클러스터: {{ selectedItem.data.cluster_name }}</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                        <div class="bg-gray-700/50 p-4 rounded-lg"><strong>Kubelet Version:</strong> {{ selectedItem.data.kubelet_version }}</div>
+                        <div class="bg-gray-700/50 p-4 rounded-lg"><strong>OS Image:</strong> {{ selectedItem.data.os_image }}</div>
+                        <div class="bg-gray-700/50 p-4 rounded-lg"><strong>Architecture:</strong> {{ selectedItem.data.architecture }}</div>
+                        <div class="bg-gray-700/50 p-4 rounded-lg"><strong>CPU/Memory:</strong> {{ selectedItem.data.capacity_cpu }} / {{ selectedItem.data.capacity_memory }}</div>
+                    </div>
+                    <div class="mb-6">
+                        <h4 class="text-xl font-semibold mb-2">라벨</h4>
+                        <div class="flex flex-wrap gap-2">
+                            <span v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-600 text-gray-200 text-xs font-medium px-2.5 py-1 rounded-full">{{ key }}{{ value ? `=${value}`: '' }}</span>
+                        </div>
+                    </div>
+                    <div>
+                        <h4 class="text-xl font-semibold mb-3">파드 목록 ({{ selectedItem.data.pod_count }})</h4>
+                        <ul class="space-y-3">
+                            <li v-for="pod in selectedItem.data.pods" :key="pod.name" @click.stop="selectPod(pod)" class="bg-gray-700/50 p-4 rounded-lg cursor-pointer hover:bg-gray-700 transition-all duration-200 hover:scale-[1.02]">
+                                <p class="font-semibold text-green-400">{{ pod.name }} <span class="text-xs text-gray-400 ml-2">({{ pod.namespace }})</span></p>
+                                <div class="flex flex-wrap gap-2 mt-2">
+                                    <span v-for="container in pod.containers" :key="container.name" class="text-xs bg-teal-500/20 text-teal-300 px-2 py-1 rounded-md flex items-center">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 inline-block mr-1.5" viewBox="0 0 20 20" fill="currentColor"><path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v2h2a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h2V4zm0 2v2h10V6H5zm10 4H5v6h10v-6z" /></svg>
+                                        {{ container.name }}: {{ container.image }}
+                                    </span>
+                                </div>
+                                <div class="flex flex-wrap gap-1 mt-2 border-t border-gray-600/50 pt-2">
+                                    <span v-for="(value, key) in pod.labels" :key="key" class="text-xs bg-gray-600 px-1.5 py-0.5 rounded">{{ key }}{{ value ? `=${value}`: '' }}</span>
+                                </div>
+                            </li>
+                            <li v-if="selectedItem.data.pods.length === 0" class="text-center text-gray-500 py-4">이 노드에는 파드가 없습니다.</li>
+                        </ul>
+                    </div>
+                </div>
+                <div v-else-if="selectedItem.type === 'pod'" class="bg-gray-800/50 p-6 rounded-xl border border-gray-700 animate-fade-in">
+                    <h3 class="text-3xl font-bold mb-1 text-green-400">{{ selectedItem.data.name }}</h3>
+                    <p class="text-sm text-gray-500 mb-4">클러스터: {{ selectedItem.data.cluster_name }} | 노드: {{ selectedItem.data.node_name }} | 네임스페이스: {{ selectedItem.data.namespace }}</p>
+                    <div class="mb-6">
+                        <h4 class="text-xl font-semibold mb-2">라벨</h4>
+                        <div class="flex flex-wrap gap-2">
+                            <span v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-600 text-gray-200 text-xs font-medium px-2.5 py-1 rounded-full">{{ key }}{{ value ? `=${value}`: '' }}</span>
+                        </div>
+                    </div>
+                    <div>
+                        <h4 class="text-xl font-semibold mb-2">컨테이너 목록 ({{ selectedItem.data.containers.length }})</h4>
+                        <ul class="space-y-2">
+                            <li v-for="container in selectedItem.data.containers" :key="container.name" class="bg-gray-700/50 p-3 rounded-lg">
+                                <p><strong>이름:</strong> {{ container.name }}</p>
+                                <p><strong>이미지:</strong> {{ container.image }}</p>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+                <div v-else-if="selectedItem.type === 'cluster'" class="bg-gray-800/50 p-6 rounded-xl border border-gray-700 animate-fade-in">
+                    <h3 class="text-3xl font-bold mb-4">{{ selectedItem.data.name }}</h3>
+                    <div class="space-y-4">
+                        <div v-for="node in selectedItem.data.nodes" :key="node.name" @click="selectNode(node)" class="bg-gray-700/50 p-4 rounded-lg cursor-pointer hover:bg-gray-700 transition-colors">
+                            <div class="flex justify-between items-center">
+                                <p class="font-semibold text-lg text-cyan-400">{{ node.name }}</p>
+                                <div>
+                                    <span class="text-sm bg-blue-500/20 text-blue-300 px-2 py-1 rounded-full mr-2">Pods: {{ node.pod_count }}</span>
+                                    <span class="text-sm bg-green-500/20 text-green-300 px-2 py-1 rounded-full">Containers: {{ node.container_count }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted, computed } = Vue;
+
+        createApp({
+            setup() {
+                // API URL을 상대 경로로 수정
+                const API_URL = '/api';
+
+                const allClusters = ref([]);
+                const loading = ref(true);
+                const error = ref(null);
+                const searchTerm = ref('');
+                const selectedItem = ref(null);
+
+                const fetchData = async () => {
+                    loading.value = true;
+                    error.value = null;
+                    try {
+                        // URL을 상대 경로로 수정했으므로, 전체 URL을 만들 필요가 없음
+                        const response = await fetch(`${API_URL}/clusters`);
+                        if (!response.ok) {
+                            throw new Error(`서버 통신 오류: ${response.statusText}`);
+                        }
+                        allClusters.value = await response.json();
+                    } catch (e) {
+                        console.error(e);
+                        error.value = e.message;
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                onMounted(fetchData);
+
+                // 이하 JavaScript 로직은 이전과 동일
+                const searchResults = computed(() => {
+                    if (!searchTerm.value.trim()) { return []; }
+                    const lowerCaseSearchTerm = searchTerm.value.toLowerCase();
+                    const results = [];
+                    allClusters.value.forEach(cluster => {
+                        cluster.nodes.forEach(node => {
+                            if (node.name.toLowerCase().includes(lowerCaseSearchTerm)) {
+                                results.push({ type: 'node', ...node });
+                            }
+                            node.pods.forEach(pod => {
+                                if (pod.name.toLowerCase().includes(lowerCaseSearchTerm)) {
+                                    results.push({ type: 'pod', ...pod });
+                                }
+                            });
+                        });
+                    });
+                    return results;
+                });
+                
+                function selectCluster(cluster) {
+                    selectedItem.value = { type: 'cluster', data: cluster };
+                    searchTerm.value = '';
+                }
+
+                function selectNode(node) {
+                    selectedItem.value = { type: 'node', data: node };
+                }
+
+                function selectPod(pod) {
+                    selectedItem.value = { type: 'pod', data: pod };
+                }
+
+                function selectFromSearch(item) {
+                    if (item.type === 'node') {
+                        selectNode(item);
+                    } else if (item.type === 'pod') {
+                        selectPod(item);
+                    }
+                }
+
+                return {
+                    loading, error, searchTerm, allClusters, searchResults, selectedItem,
+                    selectCluster, selectNode, selectPod, selectFromSearch,
+                };
+            }
+        }).mount('#app');
+    </script>
+
+</body>
+</html>

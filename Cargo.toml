@@ -1,0 +1,19 @@
+[package]
+name = "k8s_node_server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actix-web = "4"
+actix-cors = "0.7"
+actix-files = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# 쿠버네티스 라이브러리
+kube = { version = "0.91", features = ["runtime", "derive"] }
+k8s-openapi = { version = "0.22.0", features = ["v1_28"] }
+
+# 전문가용 로깅 라이브러리 추가
+log = "0.4"
+env_logger = "0.11"
