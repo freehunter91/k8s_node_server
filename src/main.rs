@@ -35,7 +35,7 @@ struct NodeInfo {
     capacity_cpu: String,
     capacity_memory: String,
     gpu_model: String,
-    gpu_count: String,
+    gpu_count: String, // 이제 status.capacity에서 가져옵니다.
     mig_devices: HashMap<String, String>,
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -67,13 +67,12 @@ impl Actor for MyWebSocket {
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("WebSocket 연결 시작됨.");
 
-        // 초기 데이터 조회 요청 (연결되자마자 한 번 실행)
+        // 초기 데이터 조회 요청
         ctx.address().do_send(FetchClusterInfo);
 
         // 매 5분(300초)마다 FetchClusterInfo 메시지를 자신에게 보내도록 스케줄링
         ctx.run_interval(Duration::from_secs(300), |act, ctx| {
             info!("주기적인 클러스터 정보 조회 트리거됨.");
-            // 수정: act.kube_contexts.clone().do_send(FetchClusterInfo); 대신 ctx.address().do_send(FetchClusterInfo);
             ctx.address().do_send(FetchClusterInfo); // MyWebSocket 액터 자신에게 메시지 전송
         });
     }
@@ -160,8 +159,16 @@ async fn fetch_and_stream_data(kube_contexts: Arc<KubeContexts>, addr: Addr<MyWe
                 let node_status = node.status.as_ref();
                 let node_info_details = node_status.and_then(|s| s.node_info.as_ref());
                 let node_labels = node.metadata.labels.clone().unwrap_or_default();
+
+                // GPU 모델은 라벨에서 가져옴
                 let gpu_model = node_labels.get("nvidia.com/gpu.product").cloned().unwrap_or_else(|| "N/A".to_string());
-                let gpu_count = node_labels.get("nvidia.com/gpu.count").cloned().unwrap_or_else(|| "0".to_string());
+
+                // GPU 수량은 node.status.capacity에서 'nvidia.com/gpu' 리소스를 찾아 가져옴
+                let gpu_count = node_status
+                    .and_then(|s| s.capacity.as_ref())
+                    .and_then(|c| c.get("nvidia.com/gpu").map(|q| q.0.clone()))
+                    .unwrap_or_else(|| "0".to_string()); // 없으면 "0"으로 기본값 설정
+
                 let mut mig_devices = HashMap::new();
                 if let Some(capacity) = node_status.and_then(|s| s.capacity.as_ref()) {
                     for (key, value) in capacity {
