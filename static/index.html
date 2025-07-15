@@ -184,9 +184,12 @@
                             <p class="text-gray-400 text-sm">메모리 용량</p>
                             <p class="text-white text-lg font-medium">{{ selectedItem.data.capacity_memory }}</p>
                         </div>
-                        <div v-if="selectedItem.data.gpu_count !== '0'" class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                        <!-- GPU 정보 섹션: v-if 조건 제거하여 항상 표시 -->
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
                             <p class="text-gray-400 text-sm">GPU 정보</p>
-                            <p class="text-white text-lg font-medium">{{ selectedItem.data.gpu_model }} ({{ selectedItem.data.gpu_count }}개)</p>
+                            <p class="text-white text-lg font-medium">
+                                {{ selectedItem.data.gpu_model }} ({{ selectedItem.data.gpu_count }}개)
+                            </p>
                         </div>
                         <div v-if="Object.keys(selectedItem.data.mig_devices).length > 0" class="bg-gray-700/50 p-5 rounded-lg border border-gray-600 col-span-full">
                             <p class="text-gray-400 text-sm mb-2">MIG 디바이스</p>
@@ -198,7 +201,7 @@
                         </div>
                     </div>
 
-                    <!-- 노드 라벨 섹션 추가 -->
+                    <!-- 노드 라벨 섹션 -->
                     <h3 class="text-2xl font-semibold text-white mt-8 mb-4">라벨</h3>
                     <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2">
                         <div v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 flex justify-between items-center">
@@ -381,11 +384,11 @@
                                 results.push({ id: `node-${cluster.name}-${node.name}`, type: 'node', name: node.name, cluster_name: cluster.name, data: node });
                             }
 
-                            // 노드 라벨 검색 (여기서 노드 라벨 검색을 추가했습니다)
+                            // 노드 라벨 검색
                             for (const key in node.labels) {
                                 if (key.toLowerCase().includes(term) || node.labels[key].toLowerCase().includes(term)) {
                                     results.push({ id: `node-label-${cluster.name}-${node.name}-${key}`, type: 'node', name: `${node.name} (Label: ${key}=${node.labels[key]})`, cluster_name: cluster.name, data: node });
-                                    break; // 중복 방지를 위해 첫 번째 일치하는 라벨에서 중단
+                                    break;
                                 }
                             }
 
