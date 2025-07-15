@@ -17,8 +17,27 @@ use std::sync::Arc;
 struct ContainerInfo { name: String, image: String }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct PodInfo { name: String, namespace: String, node_name: String, labels: HashMap<String, String>, containers: Vec<ContainerInfo>, cluster_name: String }
+
+// --- 데이터 모델 (NodeInfo에 GPU 및 MIG 정보 필드 추가) ---
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct NodeInfo { name: String, labels: HashMap<String, String>, pods: Vec<PodInfo>, pod_count: usize, container_count: usize, cluster_name: String, os_image: String, kubelet_version: String, architecture: String, capacity_cpu: String, capacity_memory: String }
+struct NodeInfo {
+    name: String,
+    labels: HashMap<String, String>,
+    pods: Vec<PodInfo>,
+    pod_count: usize,
+    container_count: usize,
+    cluster_name: String,
+    os_image: String,
+    kubelet_version: String,
+    architecture: String,
+    capacity_cpu: String,
+    capacity_memory: String,
+    // --- 추가된 GPU/MIG 필드 ---
+    gpu_model: String,
+    gpu_count: String,
+    mig_devices: HashMap<String, String>, // MIG 프로파일과 개수를 저장
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ClusterInfo { name: String, nodes: Vec<NodeInfo>, node_count: usize, pod_count: usize }
 
@@ -34,7 +53,7 @@ async fn get_all_clusters_info(
         let pods_api: Api<Pod> = Api::all(client.clone());
         let lp = ListParams::default();
 
-        // --- 로직 수정 부분 1: 노드 정보 조회 실패 시 건너뛰기 ---
+        // 노드 정보 조회 실패 시 건너뛰기
         info!("... [Context: {}] 노드 목록을 요청합니다.", context_name);
         let nodes = match nodes_api.list(&lp).await {
             Ok(n) => {
@@ -42,13 +61,12 @@ async fn get_all_clusters_info(
                 n
             },
             Err(e) => {
-                // 에러 로그를 남기고, 이 컨텍스트의 처리를 중단하고 다음 루프로 넘어갑니다.
                 warn!("⚠️ [Context: {}] 노드 정보를 가져오는데 실패했습니다. 이 클러스터를 건너뜁니다. (에러: {})", context_name, e);
-                continue; // 다음 for 루프 순회로 넘어감
+                continue;
             }
         };
 
-        // --- 로직 수정 부분 2: 파드 정보 조회 실패 시 건너뛰기 ---
+        // 파드 정보 조회 실패 시 건너뛰기
         info!("... [Context: {}] 파드 목록을 요청합니다.", context_name);
         let pods = match pods_api.list(&lp).await {
             Ok(p) => {
@@ -56,13 +74,12 @@ async fn get_all_clusters_info(
                 p
             },
             Err(e) => {
-                // 에러 로그를 남기고, 이 컨텍스트의 처리를 중단하고 다음 루프로 넘어갑니다.
                 warn!("⚠️ [Context: {}] 파드 정보를 가져오는데 실패했습니다. 이 클러스터를 건너뜁니다. (에러: {})", context_name, e);
-                continue; // 다음 for 루프 순회로 넘어감
+                continue;
             }
         };
 
-        // --- 이하 데이터 가공 로직은 동일 ---
+        // 데이터 가공 로직
         let mut nodes_info = vec![];
         for node in nodes {
             let node_name = node.metadata.name.clone().unwrap_or_default();
@@ -85,10 +102,27 @@ async fn get_all_clusters_info(
             let container_count = node_pods.iter().map(|p| p.containers.len()).sum();
             let node_status = node.status.as_ref();
             let node_info_details = node_status.and_then(|s| s.node_info.as_ref());
+            let node_labels = node.metadata.labels.as_ref().unwrap_or(&Default::default());
+
+            // --- 로직 수정 부분: GPU 및 MIG 정보 추출 ---
+            let gpu_model = node_labels.get("nvidia.com/gpu.product").cloned().unwrap_or_else(|| "N/A".to_string());
+            let gpu_count = node_labels.get("nvidia.com/gpu.count").cloned().unwrap_or_else(|| "0".to_string());
+
+            let mut mig_devices = HashMap::new();
+            if let Some(capacity) = node_status.and_then(|s| s.capacity.as_ref()) {
+                for (key, value) in capacity {
+                    if key.starts_with("nvidia.com/mig-") {
+                        // 키에서 'nvidia.com/mig-' 접두사를 제거하여 MIG 프로파일 이름만 추출합니다.
+                        let mig_profile = key.strip_prefix("nvidia.com/mig-").unwrap_or(key);
+                        mig_devices.insert(mig_profile.to_string(), value.0.clone());
+                    }
+                }
+            }
+            // --- GPU 및 MIG 정보 추출 끝 ---
 
             nodes_info.push(NodeInfo {
                 name: node_name.clone(),
-                labels: node.metadata.labels.clone().unwrap_or_default().into_iter().collect(),
+                labels: node_labels.clone(),
                 pod_count: node_pods.len(),
                 container_count,
                 pods: node_pods,
@@ -98,6 +132,10 @@ async fn get_all_clusters_info(
                 architecture: node_info_details.map_or("N/A".to_string(), |ni| ni.architecture.clone()),
                 capacity_cpu: node_status.and_then(|s| s.capacity.as_ref()).and_then(|c| c.get("cpu").map(|q| q.0.clone())).unwrap_or_else(|| "N/A".to_string()),
                 capacity_memory: node_status.and_then(|s| s.capacity.as_ref()).and_then(|c| c.get("memory").map(|q| q.0.clone())).unwrap_or_else(|| "N/A".to_string()),
+                // --- 추출한 GPU/MIG 정보를 구조체에 할당 ---
+                gpu_model,
+                gpu_count,
+                mig_devices,
             });
         }
         clusters_info.push(ClusterInfo {
