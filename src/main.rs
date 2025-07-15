@@ -7,7 +7,7 @@ use kube::{
     config::{KubeConfigOptions, Kubeconfig},
     Api, Client, Config,
 };
-use log::{error, info}; // log 라이브러리 사용
+use log::{error, info, warn}; // warn 레벨 추가
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ struct NodeInfo { name: String, labels: HashMap<String, String>, pods: Vec<PodIn
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ClusterInfo { name: String, nodes: Vec<NodeInfo>, node_count: usize, pod_count: usize }
 
-// --- API 핸들러 (오류 추적 기능 강화) ---
+// --- API 핸들러 (오류 발생 시 다음 컨텍스트로 넘어가도록 수정) ---
 #[get("/clusters")]
 async fn get_all_clusters_info(
     kube_contexts: web::Data<Arc<KubeContexts>>,
@@ -34,31 +34,35 @@ async fn get_all_clusters_info(
         let pods_api: Api<Pod> = Api::all(client.clone());
         let lp = ListParams::default();
 
-        // 순차적으로 호출하여 어느 부분에서 문제인지 명확히 확인
+        // --- 로직 수정 부분 1: 노드 정보 조회 실패 시 건너뛰기 ---
         info!("... [Context: {}] 노드 목록을 요청합니다.", context_name);
-        let nodes_res = nodes_api.list(&lp).await;
-        let nodes = match nodes_res {
-            Ok(n) => n,
+        let nodes = match nodes_api.list(&lp).await {
+            Ok(n) => {
+                info!("... [Context: {}] 노드 {}개를 성공적으로 가져왔습니다.", context_name, n.items.len());
+                n
+            },
             Err(e) => {
-                let error_message = format!("Error fetching nodes for context '{}': {}", context_name, e);
-                error!("!!! {}", error_message); // 터미널에 에러 로그
-                return HttpResponse::InternalServerError().body(error_message);
+                // 에러 로그를 남기고, 이 컨텍스트의 처리를 중단하고 다음 루프로 넘어갑니다.
+                warn!("⚠️ [Context: {}] 노드 정보를 가져오는데 실패했습니다. 이 클러스터를 건너뜁니다. (에러: {})", context_name, e);
+                continue; // 다음 for 루프 순회로 넘어감
             }
         };
-        info!("... [Context: {}] 노드 {}개를 성공적으로 가져왔습니다.", context_name, nodes.items.len());
 
+        // --- 로직 수정 부분 2: 파드 정보 조회 실패 시 건너뛰기 ---
         info!("... [Context: {}] 파드 목록을 요청합니다.", context_name);
-        let pods_res = pods_api.list(&lp).await;
-        let pods = match pods_res {
-            Ok(p) => p,
+        let pods = match pods_api.list(&lp).await {
+            Ok(p) => {
+                info!("... [Context: {}] 파드 {}개를 성공적으로 가져왔습니다.", context_name, p.items.len());
+                p
+            },
             Err(e) => {
-                let error_message = format!("Error fetching pods for context '{}': {}", context_name, e);
-                error!("!!! {}", error_message);
-                return HttpResponse::InternalServerError().body(error_message);
+                // 에러 로그를 남기고, 이 컨텍스트의 처리를 중단하고 다음 루프로 넘어갑니다.
+                warn!("⚠️ [Context: {}] 파드 정보를 가져오는데 실패했습니다. 이 클러스터를 건너뜁니다. (에러: {})", context_name, e);
+                continue; // 다음 for 루프 순회로 넘어감
             }
         };
-        info!("... [Context: {}] 파드 {}개를 성공적으로 가져왔습니다.", context_name, pods.items.len());
 
+        // --- 이하 데이터 가공 로직은 동일 ---
         let mut nodes_info = vec![];
         for node in nodes {
             let node_name = node.metadata.name.clone().unwrap_or_default();
@@ -115,32 +119,52 @@ struct KubeContexts {
 async fn main() -> std::io::Result<()> {
     // 로거 초기화. RUST_LOG 환경 변수로 로그 레벨을 제어합니다.
     // (예: RUST_LOG=info cargo run)
-    env_logger::init();
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+
 
     info!("K8s 대시보드 백엔드 서버 초기화 중...");
-    
+
     let mut contexts = HashMap::new();
-    if let Ok(config) = Kubeconfig::read() {
-        for context in &config.contexts {
-            let context_name = &context.name;
-            info!("... '{}' 컨텍스트 설정 읽는 중...", context_name);
-            let options = KubeConfigOptions { context: Some(context_name.clone()), ..Default::default() };
-            if let Ok(config_for_context) = Config::from_custom_kubeconfig(config.clone(), &options).await {
-                if let Ok(client) = Client::try_from(config_for_context) {
-                    info!("✅ '{}' 클러스터 클라이언트 생성 성공", context_name);
-                    contexts.insert(context_name.clone(), client);
-                } else {
-                    error!("⚠️ '{}' 클러스터 클라이언트 생성 실패", context_name);
+    // kubeconfig 파일을 읽어옵니다.
+    match Kubeconfig::read() {
+        Ok(config) => {
+            info!("kubeconfig 파일을 성공적으로 읽었습니다. {}개의 컨텍스트 발견.", config.contexts.len());
+            for context in &config.contexts {
+                let context_name = &context.name;
+                info!("... '{}' 컨텍스트 설정 읽는 중...", context_name);
+                let options = KubeConfigOptions { context: Some(context_name.clone()), ..Default::default() };
+                
+                // 각 컨텍스트에 대한 설정을 비동기적으로 로드합니다.
+                match Config::from_custom_kubeconfig(config.clone(), &options).await {
+                    Ok(config_for_context) => {
+                        // 설정으로부터 클라이언트를 생성합니다.
+                        match Client::try_from(config_for_context) {
+                            Ok(client) => {
+                                info!("✅ '{}' 클러스터 클라이언트 생성 성공", context_name);
+                                contexts.insert(context_name.clone(), client);
+                            },
+                            Err(e) => {
+                                error!("⚠️ '{}' 클러스터 클라이언트 생성 실패: {}", context_name, e);
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        error!("⚠️ '{}' 컨텍스트 설정 로드 실패: {}", context_name, e);
+                    }
                 }
             }
+        },
+        Err(e) => {
+            error!("⚠️ kubeconfig 파일을 찾거나 읽을 수 없습니다: {}", e);
         }
-    } else {
-        error!("⚠️ kubeconfig 파일을 찾을 수 없습니다.");
     }
-    
+
+
     let kube_contexts = web::Data::new(Arc::new(KubeContexts { contexts }));
 
     info!("\n🚀 서버 시작: http://127.0.0.1:8080");
+    info!("현재 {}개의 클러스터에 연결되었습니다.", kube_contexts.contexts.len());
+
 
     HttpServer::new(move || {
         let cors = Cors::default().allow_any_origin().allowed_methods(vec!["GET"]).allow_any_header().max_age(3600);
@@ -158,3 +182,4 @@ async fn main() -> std::io::Result<()> {
     .run()
     .await
 }
+
