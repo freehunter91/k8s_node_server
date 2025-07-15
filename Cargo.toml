@@ -9,8 +9,8 @@ actix-web = "4" # 웹 서버 프레임워크
 actix-web-actors = "4" # actix-web과 actix 액터 통합 (웹소켓)
 actix-cors = "0.6" # CORS 미들웨어
 actix-files = "0.6" # 정적 파일 서빙
-kube = "0.89" # Kubernetes API 클라이언트
-k8s-openapi = { version = "0.19", features = ["v1_27"] } # Kubernetes API 모델 (버전은 사용하는 K8s 클러스터에 맞게 조정)
+kube = "0.91" # Kubernetes API 클라이언트
+k8s-openapi = { version = "0.22.0", features = ["v1_28"] } # Kubernetes API 모델 (버전은 사용하는 K8s 클러스터에 맞게 조정)
 serde = { version = "1.0", features = ["derive"] } # 직렬화/역직렬화
 serde_json = "1.0" # JSON 처리
 log = "0.4" # 로깅
