@@ -2,7 +2,7 @@
 use actix::{Actor, Addr, AsyncContext, Handler, Message, StreamHandler};
 use actix_cors::Cors;
 use actix_files as fs;
-use actix_web::{get, web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer}; // 'get'은 사용되지 않아 제거
 use actix_web_actors::ws;
 use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::{
@@ -10,11 +10,11 @@ use kube::{
     config::{KubeConfigOptions, Kubeconfig},
     Api, Client, Config,
 };
-use log::{error, info, warn};
+use log::{info, warn}; // 'error'는 사용되지 않아 제거
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::time::Duration;
+// use std::time::Duration; // 'Duration'은 사용되지 않아 제거
 
 // --- 데이터 모델 (변경 없음) ---
 #[derive(Serialize, Deserialize, Clone, Debug, Message)]
@@ -96,6 +96,8 @@ impl Handler<ClusterInfo> for MyWebSocket {
         // 받은 ClusterInfo를 JSON 문자열로 변환하여 클라이언트에게 전송
         if let Ok(json_str) = serde_json::to_string(&msg) {
             ctx.text(json_str);
+        } else {
+            warn!("ClusterInfo를 JSON으로 직렬화하는 데 실패했습니다.");
         }
     }
 }
@@ -110,13 +112,13 @@ async fn fetch_and_stream_data(kube_contexts: Arc<KubeContexts>, addr: Addr<MyWe
 
         let nodes_res = nodes_api.list(&lp).await;
         let pods_res = pods_api.list(&lp).await;
-        
+
         if let (Ok(nodes), Ok(pods)) = (nodes_res, pods_res) {
-            // (기존 데이터 가공 로직은 여기에 위치, 생략)
             let mut nodes_info = vec![];
-            for node in nodes {
+            for node in nodes.items { // .items를 추가하여 Vec<Node>를 순회
                 let node_name = node.metadata.name.clone().unwrap_or_default();
-                let node_pods: Vec<PodInfo> = pods.iter().filter(|p| p.spec.as_ref().and_then(|s| s.node_name.as_ref()) == Some(&node_name))
+                let node_pods: Vec<PodInfo> = pods.items.iter() // .items를 추가하여 Vec<Pod>를 순회
+                    .filter(|p| p.spec.as_ref().and_then(|s| s.node_name.as_ref()) == Some(&node_name))
                     .map(|p| {
                         let containers = p.spec.as_ref().map(|s| s.containers.iter().map(|c| ContainerInfo {
                             name: c.name.clone(),
@@ -149,7 +151,7 @@ async fn fetch_and_stream_data(kube_contexts: Arc<KubeContexts>, addr: Addr<MyWe
                 }
                 nodes_info.push(NodeInfo { name: node_name.clone(), labels: node_labels.clone(), pod_count: node_pods.len(), container_count, pods: node_pods, cluster_name: context_name.clone(), os_image: node_info_details.map_or("N/A".to_string(), |ni| ni.os_image.clone()), kubelet_version: node_info_details.map_or("N/A".to_string(), |ni| ni.kubelet_version.clone()), architecture: node_info_details.map_or("N/A".to_string(), |ni| ni.architecture.clone()), capacity_cpu: node_status.and_then(|s| s.capacity.as_ref()).and_then(|c| c.get("cpu").map(|q| q.0.clone())).unwrap_or_else(|| "N/A".to_string()), capacity_memory: node_status.and_then(|s| s.capacity.as_ref()).and_then(|c| c.get("memory").map(|q| q.0.clone())).unwrap_or_else(|| "N/A".to_string()), gpu_model, gpu_count, mig_devices });
             }
-            
+
             let cluster_info = ClusterInfo {
                 name: context_name.clone(),
                 node_count: nodes_info.len(),
@@ -161,7 +163,7 @@ async fn fetch_and_stream_data(kube_contexts: Arc<KubeContexts>, addr: Addr<MyWe
             addr.do_send(cluster_info);
             info!("✅ [Context: {}] 클러스터 정보를 클라이언트로 전송했습니다.", context_name);
         } else {
-            warn!("⚠️ [Context: {}] 정보 조회에 실패하여 건너뜁니다.", context_name);
+            warn!("⚠️ [Context: {}] 정보 조회에 실패하여 건너뜁니다. (노드 또는 파드 조회 오류)", context_name);
         }
     }
     info!("모든 클러스터 정보 조회를 완료했습니다.");
@@ -190,8 +192,7 @@ struct KubeContexts {
 async fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
     info!("K8s 대시보드 백엔드 서버 초기화 중...");
-    
-    // (기존 클라이언트 생성 로직은 동일, 생략)
+
     let mut contexts = HashMap::new();
     if let Ok(config) = Kubeconfig::read() {
         for context in &config.contexts {
@@ -200,11 +201,17 @@ async fn main() -> std::io::Result<()> {
             if let Ok(config_for_context) = Config::from_custom_kubeconfig(config.clone(), &options).await {
                 if let Ok(client) = Client::try_from(config_for_context) {
                     contexts.insert(context_name.clone(), client);
+                } else {
+                    warn!("⚠️ [Context: {}] 클라이언트 생성에 실패했습니다.", context_name);
                 }
+            } else {
+                warn!("⚠️ [Context: {}] 설정 로드에 실패했습니다.", context_name);
             }
         }
+    } else {
+        warn!("⚠️ Kubeconfig 파일을 읽는 데 실패했습니다. 기본 설정으로 진행합니다.");
     }
-    
+
     let kube_contexts = web::Data::new(Arc::new(KubeContexts { contexts }));
 
     info!("\n🚀 서버 시작: http://127.0.0.1:8080");
@@ -216,6 +223,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(kube_contexts.clone())
             // 기존 /api/clusters 대신 /ws/ 라우트 추가
             .route("/ws/", web::get().to(ws_route))
+            // 정적 파일 서빙을 위한 'static' 디렉토리 설정
             .service(fs::Files::new("/", "./static").index_file("index.html"))
     })
     .bind(("127.0.0.1", 8080))?
