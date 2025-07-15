@@ -115,7 +115,12 @@
             </aside>
 
             <!-- 오른쪽 패널: 상세 정보 뷰 -->
-            <section class="lg:col-span-2 bg-gray-800/50 p-6 rounded-xl border border-gray-700 shadow-lg">
+            <section class="lg:col-span-2 bg-gray-800/50 p-6 rounded-xl border border-gray-700 shadow-lg relative">
+                <!-- [수정] 뒤로가기 버튼 -->
+                <button v-if="selectedItem" @click="goBackToMain" class="absolute top-4 right-4 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200 z-10">
+                    ← 뒤로 가기
+                </button>
+
                 <div v-if="!selectedItem" class="text-center py-20">
                     <p class="text-2xl text-gray-400">왼쪽에서 클러스터, 노드 또는 파드를 선택해주세요.</p>
                     <p class="text-md text-gray-500 mt-2">실시간 데이터를 확인하고 상세 정보를 탐색할 수 있습니다.</p>
@@ -288,7 +293,7 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted, computed, watch } = Vue; // watch 추가
+        const { createApp, ref, onMounted, onUnmounted, computed, watch } = Vue; // onUnmounted 추가
 
         createApp({
             setup() {
@@ -296,25 +301,22 @@
                 const connecting = ref(true);
                 const error = ref(null);
                 const searchTerm = ref('');
-                const debouncedSearchTerm = ref(''); // 디바운싱된 검색어
-                let debounceTimeout = null; // 디바운싱 타이머 ID
+                const debouncedSearchTerm = ref('');
+                let debounceTimeout = null;
                 const selectedItem = ref(null);
 
-                // searchTerm 변경 감지 및 디바운싱 적용
                 watch(searchTerm, (newTerm) => {
                     if (debounceTimeout) {
                         clearTimeout(debounceTimeout);
                     }
                     debounceTimeout = setTimeout(() => {
                         debouncedSearchTerm.value = newTerm;
-                    }, 300); // 300ms 동안 입력이 없으면 검색 실행
+                    }, 300);
                 });
-
 
                 const connectWebSocket = () => {
                     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                     const wsUrl = `${wsProtocol}//${window.location.host}/ws/`;
-
                     const socket = new WebSocket(wsUrl);
 
                     socket.onopen = () => {
@@ -327,15 +329,12 @@
                         try {
                             const newClusterData = JSON.parse(event.data);
                             console.log("수신된 클러스터:", newClusterData.name);
-
                             const index = allClusters.value.findIndex(c => c.name === newClusterData.name);
-
                             if (index !== -1) {
                                 allClusters.value[index] = newClusterData;
                             } else {
                                 allClusters.value.push(newClusterData);
                             }
-
                             if (selectedItem.value) {
                                 if (selectedItem.value.type === 'cluster' && selectedItem.value.data.name === newClusterData.name) {
                                     selectedItem.value.data = newClusterData;
@@ -354,7 +353,6 @@
                                     }
                                 }
                             }
-
                         } catch (e) {
                             console.error("수신된 데이터 처리 오류:", e);
                             error.value = "수신된 데이터를 처리하는 중 오류가 발생했습니다.";
@@ -375,59 +373,62 @@
                     };
                 };
 
-                onMounted(connectWebSocket);
+                // [수정] 뒤로가기 함수
+                function goBackToMain() {
+                    selectedItem.value = null;
+                }
 
-                // 검색 결과 계산 (computed 속성) - debouncedSearchTerm 사용
+                // [수정] ESC 키 이벤트 핸들러
+                const handleEscKey = (event) => {
+                    if (event.key === 'Escape') {
+                        goBackToMain();
+                    }
+                };
+
+                onMounted(() => {
+                    connectWebSocket();
+                    window.addEventListener('keydown', handleEscKey); // 이벤트 리스너 등록
+                });
+
+                onUnmounted(() => {
+                    window.removeEventListener('keydown', handleEscKey); // 컴포넌트 해제 시 리스너 제거
+                });
+
                 const searchResults = computed(() => {
-                    const term = debouncedSearchTerm.value.toLowerCase(); // debouncedSearchTerm 사용
+                    const term = debouncedSearchTerm.value.toLowerCase();
                     if (!term) return [];
-
                     const results = [];
                     allClusters.value.forEach(cluster => {
-                        // 클러스터 이름 검색
                         if (cluster.name.toLowerCase().includes(term)) {
                             results.push({ id: `cluster-${cluster.name}`, type: 'cluster', name: cluster.name, data: cluster });
                         }
-
                         cluster.nodes.forEach(node => {
-                            // 노드 이름 검색
                             if (node.name.toLowerCase().includes(term)) {
                                 results.push({ id: `node-${cluster.name}-${node.name}`, type: 'node', name: node.name, cluster_name: cluster.name, data: node });
                             }
-
-                            // 노드 라벨 검색
                             for (const key in node.labels) {
                                 if (key.toLowerCase().includes(term) || node.labels[key].toLowerCase().includes(term)) {
                                     results.push({ id: `node-label-${cluster.name}-${node.name}-${key}`, type: 'node', name: `${node.name} (Label: ${key}=${node.labels[key]})`, cluster_name: cluster.name, data: node });
                                     break;
                                 }
                             }
-
                             node.pods.forEach(pod => {
-                                // 파드 이름 검색
                                 if (pod.name.toLowerCase().includes(term)) {
                                     results.push({ id: `pod-${cluster.name}-${node.name}-${pod.name}`, type: 'pod', name: pod.name, cluster_name: cluster.name, node_name: node.name, data: pod });
                                 }
-
-                                // 파드 네임스페이스 검색
                                 if (pod.namespace.toLowerCase().includes(term)) {
                                     results.push({ id: `pod-ns-${cluster.name}-${node.name}-${pod.name}`, type: 'pod', name: `${pod.name} (NS: ${pod.namespace})`, cluster_name: cluster.name, node_name: node.name, data: pod });
                                 }
-
-                                // 파드 라벨 검색
                                 for (const key in pod.labels) {
                                     if (key.toLowerCase().includes(term) || pod.labels[key].toLowerCase().includes(term)) {
                                         results.push({ id: `pod-label-${cluster.name}-${node.name}-${pod.name}-${key}`, type: 'pod', name: `${pod.name} (Label: ${key}=${pod.labels[key]})`, cluster_name: cluster.name, node_name: node.name, data: pod });
                                         break;
                                     }
                                 }
-
                                 pod.containers.forEach(container => {
-                                    // 컨테이너 이름 검색
                                     if (container.name.toLowerCase().includes(term)) {
                                         results.push({ id: `container-${cluster.name}-${node.name}-${pod.name}-${container.name}`, type: 'pod', name: `${pod.name} (Container: ${container.name})`, cluster_name: cluster.name, node_name: node.name, data: pod });
                                     }
-                                    // 컨테이너 이미지 검색
                                     if (container.image.toLowerCase().includes(term)) {
                                         results.push({ id: `container-image-${cluster.name}-${node.name}-${pod.name}-${container.name}`, type: 'pod', name: `${pod.name} (Image: ${container.image})`, cluster_name: cluster.name, node_name: node.name, data: pod });
                                     }
@@ -435,42 +436,37 @@
                             });
                         });
                     });
-                    // 중복 제거 (id 기준)
                     const uniqueResults = Array.from(new Map(results.map(item => [item.id, item])).values());
                     return uniqueResults;
                 });
 
-                // 클러스터 선택 함수
                 function selectCluster(cluster) {
                     selectedItem.value = { type: 'cluster', data: cluster };
-                    searchTerm.value = ''; // 검색어 초기화
+                    searchTerm.value = '';
                 }
 
-                // 노드 선택 함수
                 function selectNode(node) {
                     selectedItem.value = { type: 'node', data: node };
-                    searchTerm.value = ''; // 검색어 초기화
+                    searchTerm.value = '';
                 }
 
-                // 파드 선택 함수
                 function selectPod(pod) {
                     selectedItem.value = { type: 'pod', data: pod };
-                    searchTerm.value = ''; // 검색어 초기화
+                    searchTerm.value = '';
                 }
 
-                // 검색 결과에서 항목 선택 함수
                 function selectFromSearch(item) {
                     selectedItem.value = item;
-                    searchTerm.value = ''; // 검색어 초기화
+                    searchTerm.value = '';
                 }
 
                 return {
                     connecting, error, searchTerm, allClusters, searchResults, selectedItem,
                     selectCluster, selectNode, selectPod, selectFromSearch,
+                    goBackToMain, // [수정] 템플릿에서 사용할 수 있도록 반환
                 };
             }
         }).mount('#app');
     </script>
 </body>
 </html>
-

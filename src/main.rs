@@ -9,6 +9,7 @@ use kube::{
     api::ListParams,
     config::{KubeConfigOptions, Kubeconfig},
     Api, Client, Config,
+    Error as KubeError, // kube::Error를 KubeError로 별칭 지정하여 모호성 제거
 };
 use log::{info, warn, error, debug};
 use serde::{Deserialize, Serialize};
@@ -52,7 +53,30 @@ struct PodInfo {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ContainerInfo { name: String, image: String }
 
-// 주기적인 클러스터 정보 조회를 위한 메시지 정의
+// --- 유틸리티 함수 ---
+
+/// KubeError를 일관된 형식으로 로깅하는 헬퍼 함수 (최신 kube-rs 버전 호환)
+fn log_kube_error(context_name: &str, action: &str, e: &KubeError) {
+    error!("❌ [Context: {}] {} 실패: {}", context_name, action, e);
+    match e {
+        KubeError::Api(api_error) => {
+            error!("   API 오류 상세: Status={}, Message={}", api_error.code, api_error.message);
+            if api_error.code == 401 || api_error.code == 403 {
+                error!("   인증/권한 오류 가능성: 토큰 만료, 잘못된 토큰, 또는 권한 부족.");
+            }
+        },
+        KubeError::InferConfig(config_error) => {
+            error!("   Kubeconfig 추론/로드 오류 상세: {:?}", config_error);
+        }
+        // 다른 오류들은 포괄적으로 처리
+        _ => error!("   기타 kube-rs 오류 (자세한 내용은 오류 메시지 확인): {:?}", e),
+    }
+}
+
+
+// --- Actor 및 메시지 정의 ---
+
+/// 주기적인 클러스터 정보 조회를 위한 메시지 정의
 #[derive(Message)]
 #[rtype(result = "()")]
 struct FetchClusterInfo;
@@ -68,14 +92,11 @@ impl Actor for MyWebSocket {
     /// 웹소켓 연결이 시작될 때 호출되는 메소드
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("WebSocket 연결 시작됨.");
-
-        // 초기 데이터 조회 요청
         ctx.address().do_send(FetchClusterInfo);
-
         // 매 5분(300초)마다 FetchClusterInfo 메시지를 자신에게 보내도록 스케줄링
-        ctx.run_interval(Duration::from_secs(300), |act, ctx| {
+        ctx.run_interval(Duration::from_secs(300), |_, ctx| {
             info!("주기적인 클러스터 정보 조회 트리거됨.");
-            ctx.address().do_send(FetchClusterInfo); // MyWebSocket 액터 자신에게 메시지 전송
+            ctx.address().do_send(FetchClusterInfo);
         });
     }
 }
@@ -100,7 +121,6 @@ impl Handler<ClusterInfo> for MyWebSocket {
     type Result = ();
 
     fn handle(&mut self, msg: ClusterInfo, ctx: &mut Self::Context) {
-        // 받은 ClusterInfo를 JSON 문자열로 변환하여 클라이언트에게 전송
         if let Ok(json_str) = serde_json::to_string(&msg) {
             ctx.text(json_str);
         } else {
@@ -109,15 +129,13 @@ impl Handler<ClusterInfo> for MyWebSocket {
     }
 }
 
-// FetchClusterInfo 메시지를 처리하는 핸들러 추가
+// FetchClusterInfo 메시지를 처리하는 핸들러
 impl Handler<FetchClusterInfo> for MyWebSocket {
     type Result = ();
 
     fn handle(&mut self, _msg: FetchClusterInfo, ctx: &mut Self::Context) {
         let addr = ctx.address();
         let contexts_clone = self.kube_contexts.clone();
-
-        // 데이터 조회는 오래 걸릴 수 있으므로, 별도의 비동기 작업으로 분리
         actix_web::rt::spawn(async move {
             fetch_and_stream_data(contexts_clone, addr).await;
         });
@@ -127,7 +145,6 @@ impl Handler<FetchClusterInfo> for MyWebSocket {
 
 /// 클러스터 정보를 조회하고 웹소켓 액터에게 메시지를 보내는 함수
 async fn fetch_and_stream_data(kube_contexts: Arc<KubeContexts>, addr: Addr<MyWebSocket>) {
-    // KubeContexts가 비어있는지 확인 (사전 테스트에서 모두 실패한 경우)
     if kube_contexts.contexts.is_empty() {
         warn!("⚠️ KubeContexts에 유효한 클러스터가 없어 정보 조회를 건너뜁니다.");
         return;
@@ -199,41 +216,12 @@ async fn fetch_and_stream_data(kube_contexts: Arc<KubeContexts>, addr: Addr<MyWe
                 info!("✅ [Context: {}] 클러스터 정보를 클라이언트로 전송했습니다.", context_name);
             },
             (nodes_res, pods_res) => { // 노드 또는 파드 조회 중 하나라도 실패한 경우
-                let mut error_messages = String::new();
-                if let Err(nodes_err) = nodes_res {
-                    error_messages.push_str(&format!("노드 조회 실패: {}", nodes_err));
-                    // 401 Unauthorized 오류에 대한 특별 로깅
-                    if let Some(api_error) = nodes_err.as_api_error() {
-                        if api_error.code == 401 {
-                            error!("❌ [Context: {}] 인증 오류 (401 Unauthorized) - 노드 조회. kubeconfig 토큰 또는 권한을 확인하세요.", context_name);
-                            error!("   API 오류 상세: Status={:?}, Message={}", api_error.status, api_error.message);
-                        }
-                    }
-                    if let Some(req_error) = nodes_err.as_request_error() {
-                        error!("   요청 오류 상세: {:?}", req_error);
-                    }
-                    if let Some(io_error) = nodes_err.as_io_error() {
-                        error!("   IO 오류 상세: {:?}", io_error);
-                    }
+                if let Err(e) = nodes_res {
+                    log_kube_error(context_name, "노드 조회", &e);
                 }
-                if let Err(pods_err) = pods_res {
-                    if !error_messages.is_empty() { error_messages.push_str("; "); }
-                    error_messages.push_str(&format!("파드 조회 실패: {}", pods_err));
-                    // 401 Unauthorized 오류에 대한 특별 로깅
-                    if let Some(api_error) = pods_err.as_api_error() {
-                        if api_error.code == 401 {
-                            error!("❌ [Context: {}] 인증 오류 (401 Unauthorized) - 파드 조회. kubeconfig 토큰 또는 권한을 확인하세요.", context_name);
-                            error!("   API 오류 상세: Status={:?}, Message={}", api_error.status, api_error.message);
-                        }
-                    }
-                    if let Some(req_error) = pods_err.as_request_error() {
-                        error!("   요청 오류 상세: {:?}", req_error);
-                    }
-                    if let Some(io_error) = pods_err.as_io_error() {
-                        error!("   IO 오류 상세: {:?}", io_error);
-                    }
+                if let Err(e) = pods_res {
+                    log_kube_error(context_name, "파드 조회", &e);
                 }
-                error!("❌ [Context: {}] 클러스터 정보 조회 실패: {}", context_name, error_messages);
                 warn!("⚠️ [Context: {}] 정보 조회에 실패하여 건너뜁니다.", context_name);
             }
         }
@@ -281,21 +269,12 @@ async fn main() -> std::io::Result<()> {
                             debug!("클라이언트 '{}' 생성 성공.", context_name);
                             contexts.insert(context_name.clone(), client);
                         },
-                        Err(e) => {
-                            warn!("⚠️ [Context: {}] 클라이언트 생성 실패: {}", context_name, e);
-                            if let Some(auth_err) = e.as_auth_error() {
-                                error!("   인증 오류 상세: {:?}", auth_err);
-                            } else if let Some(config_err) = e.as_config_error() {
-                                error!("   설정 오류 상세: {:?}", config_err);
-                            }
-                        }
+                        Err(e) => log_kube_error(context_name, "클라이언트 생성", &e),
                     }
                 },
+                // Config::from_custom_kubeconfig는 KubeconfigError를 반환하므로 직접 처리합니다.
                 Err(e) => {
-                    warn!("⚠️ [Context: {}] 설정 로드 실패: {}", context_name, e);
-                    if let Some(config_err) = e.as_config_error() {
-                        error!("   설정 오류 상세: {:?}", config_err);
-                    }
+                    error!("❌ [Context: {}] Kubeconfig로부터 설정 로드 실패: {}", context_name, e);
                 }
             }
         }
@@ -304,53 +283,51 @@ async fn main() -> std::io::Result<()> {
         error!("🚨 Kubeconfig 파일을 읽는 데 실패했습니다. 경로: '{}' 또는 파일 권한을 확인하세요.", kubeconfig_path);
     }
 
-    // 2. 환경 변수로부터 외부 토큰 인증 클러스터 정보 로드
+    // 2. 환경 변수로부터 외부 토큰 인증 클러스터 정보 로드 (주석 처리)
+    /*
     let external_cluster_name = env::var("K8S_EXTERNAL_CLUSTER_NAME");
     let external_cluster_url = env::var("K8S_EXTERNAL_CLUSTER_URL");
     let external_token = env::var("K8S_EXTERNAL_TOKEN");
-    let external_ca_cert_path = env::var("K8S_EXTERNAL_CA_CERT_PATH"); // 선택적 CA 인증서 경로
+    let external_ca_cert_path = env::var("K8S_EXTERNAL_CA_CERT_PATH");
 
     if let (Ok(name), Ok(url), Ok(token)) = (external_cluster_name, external_cluster_url, external_token) {
         info!("환경 변수로부터 외부 클러스터 정보 감지: '{}'", name);
-        let mut external_config = Config::new(url.parse().expect("K8S_EXTERNAL_CLUSTER_URL이 유효한 URL 형식이 아닙니다."));
-        external_config.token = Some(token);
+        match url.parse() {
+            Ok(uri) => {
+                let mut external_config = Config::new(uri);
 
-        // 외부 CA 인증서 경로가 제공되면 로드
-        if let Ok(ca_path) = external_ca_cert_path {
-            match std::fs::read(ca_path) {
-                Ok(ca_data) => {
-                    external_config.root_cert = Some(ca_data);
-                    info!("외부 클러스터 '{}'를 위해 CA 인증서 로드 성공.", name);
-                },
-                Err(e) => {
-                    error!("외부 클러스터 '{}'를 위한 CA 인증서 파일 읽기 실패 ({}): {}", name, ca_path, e);
-                    // CA 인증서 로드 실패 시 해당 클러스터는 건너뜁니다.
-                    // continue; // 이 루프는 단일 외부 클러스터이므로 continue 대신 경고만 출력
+                // Config 구조체의 auth_info 필드에 직접 토큰을 설정합니다.
+                // kube-rs는 `secrecy::Secret`을 사용하여 토큰을 안전하게 처리합니다.
+                external_config.auth_info.token = Some(Secret::new(token));
+
+                if let Ok(ca_path) = external_ca_cert_path {
+                    match std::fs::read(&ca_path) {
+                        Ok(ca_data) => {
+                            external_config.root_cert = Some(vec![ca_data]);
+                            info!("외부 클러스터 '{}'를 위해 CA 인증서 로드 성공.", name);
+                        },
+                        Err(e) => error!("외부 클러스터 '{}'를 위한 CA 인증서 파일 읽기 실패 ({}): {}", name, ca_path, e),
+                    }
+                } else {
+                    warn!("K8S_EXTERNAL_CA_CERT_PATH 환경 변수가 설정되지 않았습니다. 자체 서명된 인증서 클러스터에 연결 시 문제가 발생할 수 있습니다.");
                 }
-            }
-        } else {
-            warn!("K8S_EXTERNAL_CA_CERT_PATH 환경 변수가 설정되지 않았습니다. 자체 서명된 인증서 클러스터에 연결 시 문제가 발생할 수 있습니다.");
-            // 필요에 따라 self-signed certs를 허용하려면:
-            // external_config.accept_invalid_certs = true;
-        }
 
-        match Client::try_from(external_config) {
-            Ok(client) => {
-                info!("외부 클러스터 '{}' 클라이언트 생성 성공.", name);
-                contexts.insert(name, client);
+                match Client::try_from(external_config) {
+                    Ok(client) => {
+                        info!("외부 클러스터 '{}' 클라이언트 생성 성공.", name);
+                        contexts.insert(name, client);
+                    },
+                    Err(e) => log_kube_error(&name, "외부 클러스터 클라이언트 생성", &e),
+                }
             },
             Err(e) => {
-                error!("❌ 외부 클러스터 클라이언트 생성 실패 ({}): {}", name, e);
-                if let Some(auth_err) = e.as_auth_error() {
-                    error!("   인증 오류 상세: {:?}", auth_err);
-                } else if let Some(config_err) = e.as_config_error() {
-                    error!("   설정 오류 상세: {:?}", config_err);
-                }
+                error!("K8S_EXTERNAL_CLUSTER_URL ('{}')이 유효한 URL 형식이 아닙니다: {}", url, e);
             }
         }
     } else {
         debug!("K8S_EXTERNAL_CLUSTER_NAME, K8S_EXTERNAL_CLUSTER_URL, K8S_EXTERNAL_TOKEN 환경 변수가 모두 설정되지 않아 외부 클러스터 로드를 건너뜁니다.");
     }
+    */
 
     // --- 사전 접속 테스트 로직 ---
     info!("--- 클러스터 사전 접속 테스트 시작 ---");
@@ -369,23 +346,7 @@ async fn main() -> std::io::Result<()> {
                     successfully_connected_contexts.insert(context_name, client);
                 },
                 Err(e) => {
-                    error!("❌ [Context: {}] Kubernetes API 서버 접속 테스트 실패: {}", context_name, e);
-                    if let Some(api_error) = e.as_api_error() {
-                        error!("   API 오류 상세: Status={:?}, Message={}", api_error.status, api_error.message);
-                        if api_error.code == 401 || api_error.code == 403 {
-                            error!("   인증/권한 오류 가능성: 토큰 만료, 잘못된 토큰, 또는 권한 부족.");
-                        }
-                    } else if let Some(req_error) = e.as_request_error() {
-                        error!("   요청 오류 상세: {:?}", req_error);
-                    } else if let Some(io_error) = e.as_io_error() {
-                        error!("   IO 오류 상세: {:?}", io_error);
-                    } else if let Some(auth_err) = e.as_auth_error() {
-                        error!("   인증 시스템 오류 상세: {:?}", auth_err);
-                    } else if let Some(config_err) = e.as_config_error() {
-                        error!("   설정 로드 오류 상세: {:?}", config_err);
-                    } else {
-                        error!("   기타 kube-rs 오류: {:?}", e);
-                    }
+                    log_kube_error(&context_name, "Kubernetes API 서버 접속 테스트", &e);
                 }
             }
             // 각 클러스터 접속 테스트 후 3초 대기
@@ -394,10 +355,8 @@ async fn main() -> std::io::Result<()> {
     }
     info!("--- 클러스터 사전 접속 테스트 완료 ---");
 
-    // 성공적으로 접속된 클라이언트만 사용하여 KubeContexts 생성
     let kube_contexts = web::Data::new(Arc::new(KubeContexts { contexts: successfully_connected_contexts }));
 
-    // 만약 접속 가능한 클러스터가 하나도 없다면 서버를 시작하지 않거나 경고
     if kube_contexts.contexts.is_empty() {
         error!("🚨 접속 가능한 Kubernetes 클러스터가 없습니다. 서버를 시작하지 않습니다. kubeconfig 및 네트워크 설정을 확인해주세요.");
         return Ok(());
