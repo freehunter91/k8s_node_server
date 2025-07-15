@@ -59,6 +59,9 @@ async fn get_all_clusters_info(
         let pods_api: Api<Pod> = Api::all(client.clone());
         let lp = ListParams::default();
 
+        // =================================================================
+        // === 실패한 클러스터 무시 로직 1: 노드 정보 조회 실패 시 건너뛰기
+        // =================================================================
         info!("... [Context: {}] 노드 목록을 요청합니다.", context_name);
         let nodes = match nodes_api.list(&lp).await {
             Ok(n) => {
@@ -67,10 +70,13 @@ async fn get_all_clusters_info(
             },
             Err(e) => {
                 warn!("⚠️ [Context: {}] 노드 정보를 가져오는데 실패했습니다. 이 클러스터를 건너뜁니다. (에러: {})", context_name, e);
-                continue;
+                continue; // 에러 발생 시 다음 클러스터로 넘어감
             }
         };
 
+        // =================================================================
+        // === 실패한 클러스터 무시 로직 2: 파드 정보 조회 실패 시 건너뛰기
+        // =================================================================
         info!("... [Context: {}] 파드 목록을 요청합니다.", context_name);
         let pods = match pods_api.list(&lp).await {
             Ok(p) => {
@@ -79,7 +85,7 @@ async fn get_all_clusters_info(
             },
             Err(e) => {
                 warn!("⚠️ [Context: {}] 파드 정보를 가져오는데 실패했습니다. 이 클러스터를 건너뜁니다. (에러: {})", context_name, e);
-                continue;
+                continue; // 에러 발생 시 다음 클러스터로 넘어감
             }
         };
 
@@ -106,9 +112,6 @@ async fn get_all_clusters_info(
             let node_status = node.status.as_ref();
             let node_info_details = node_status.and_then(|s| s.node_info.as_ref());
             
-            // =================================================================
-            // === 바로 이 부분이 수정된 라인입니다.
-            // =================================================================
             let node_labels = node.metadata.labels.clone().unwrap_or_default();
 
             let gpu_model = node_labels.get("nvidia.com/gpu.product").cloned().unwrap_or_else(|| "N/A".to_string());
@@ -171,6 +174,9 @@ async fn main() -> std::io::Result<()> {
                 info!("... '{}' 컨텍스트 설정 읽는 중...", context_name);
                 let options = KubeConfigOptions { context: Some(context_name.clone()), ..Default::default() };
                 
+                // =================================================================
+                // === 실패한 클러스터 무시 로직 3: 클라이언트 생성 실패 시 건너뛰기
+                // =================================================================
                 match Config::from_custom_kubeconfig(config.clone(), &options).await {
                     Ok(config_for_context) => {
                         match Client::try_from(config_for_context) {
@@ -179,11 +185,13 @@ async fn main() -> std::io::Result<()> {
                                 contexts.insert(context_name.clone(), client);
                             },
                             Err(e) => {
+                                // 클라이언트 생성 실패 시 에러 로그만 남기고 계속 진행
                                 error!("⚠️ '{}' 클러스터 클라이언트 생성 실패: {}", context_name, e);
                             }
                         }
                     },
                     Err(e) => {
+                        // 컨텍스트 설정 로드 실패 시 에러 로그만 남기고 계속 진행
                         error!("⚠️ '{}' 컨텍스트 설정 로드 실패: {}", context_name, e);
                     }
                 }
