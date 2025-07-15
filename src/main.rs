@@ -14,7 +14,7 @@ use log::{info, warn, error};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::time::Duration; // Duration 사용을 위해 다시 추가
+use std::time::Duration;
 
 // --- 데이터 모델 (변경 없음) ---
 #[derive(Serialize, Deserialize, Clone, Debug, Message)]
@@ -67,13 +67,14 @@ impl Actor for MyWebSocket {
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("WebSocket 연결 시작됨.");
 
-        // 초기 데이터 조회 요청
+        // 초기 데이터 조회 요청 (연결되자마자 한 번 실행)
         ctx.address().do_send(FetchClusterInfo);
 
         // 매 5분(300초)마다 FetchClusterInfo 메시지를 자신에게 보내도록 스케줄링
-        ctx.run_interval(Duration::from_secs(300), |act, ctx| { // 30초 -> 300초로 변경
+        ctx.run_interval(Duration::from_secs(300), |act, ctx| {
             info!("주기적인 클러스터 정보 조회 트리거됨.");
-            act.kube_contexts.clone().do_send(FetchClusterInfo); // ActorContext를 통해 메시지 전송
+            // 수정: act.kube_contexts.clone().do_send(FetchClusterInfo); 대신 ctx.address().do_send(FetchClusterInfo);
+            ctx.address().do_send(FetchClusterInfo); // MyWebSocket 액터 자신에게 메시지 전송
         });
     }
 }
