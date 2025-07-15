@@ -7,43 +7,261 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+        /* 기본 글꼴 설정 */
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+        /* 전체 배경색 및 글자색 설정 */
         html, body { background-color: #111827; color: #E5E7EB; }
+        /* 페이드인 애니메이션 정의 */
         @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* 페이드인 애니메이션 적용 클래스 */
         .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
+        /* 스크롤바 스타일링 (선택 사항) */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
     </style>
 </head>
 <body>
 
-    <div id="app" class="container mx-auto px-4 py-8">
-        <!-- 헤더 -->
-        <header class="mb-8">
-            <h1 class="text-4xl font-bold text-center text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600">
+    <div id="app" class="container mx-auto px-4 py-8 min-h-screen">
+        <!-- 헤더 섹션 -->
+        <header class="mb-8 p-4 bg-gray-800/30 rounded-xl shadow-lg border border-gray-700">
+            <h1 class="text-4xl sm:text-5xl font-extrabold text-center text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-2">
                 Kubernetes 통합 대시보드
             </h1>
-            <p class="text-center text-gray-400 mt-2">Rust & Vue.js 기반 (실시간 스트리밍)</p>
+            <p class="text-center text-gray-400 text-lg">Rust & Vue.js 기반 실시간 클러스터 모니터링</p>
         </header>
 
-        <!-- 로딩 및 오류 처리 -->
-        <div v-if="connecting" class="text-center py-10">
-            <p class="text-xl text-gray-400">서버에 연결하는 중...</p>
+        <!-- 로딩 및 오류 메시지 섹션 -->
+        <div v-if="connecting" class="text-center py-20">
+            <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500 mx-auto mb-4"></div>
+            <p class="text-2xl text-gray-400">서버에 연결하는 중...</p>
         </div>
-        <div v-else-if="error" class="bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-6">
+        <div v-else-if="error" class="bg-red-900/50 border border-red-700 text-red-300 px-6 py-4 rounded-lg mb-8 shadow-md">
             <p><span class="font-bold">오류:</span> {{ error }}</p>
+            <p class="mt-2 text-sm">문제가 지속되면 서버 로그를 확인하거나 페이지를 새로고침 해주세요.</p>
         </div>
-        <div v-if="!connecting && allClusters.length === 0 && !error" class="text-center py-10">
-            <p class="text-xl text-gray-400">클러스터 정보를 수신 대기 중...</p>
+        <div v-if="!connecting && allClusters.length === 0 && !error" class="text-center py-20">
+            <p class="text-2xl text-gray-400">클러스터 정보를 수신 대기 중이거나 연결된 클러스터가 없습니다.</p>
+            <p class="text-md text-gray-500 mt-2">kubeconfig 설정을 확인하거나 백엔드 서버가 실행 중인지 확인해주세요.</p>
         </div>
 
-        <!-- 메인 컨텐츠 (HTML 구조는 변경 없음) -->
-        <main v-if="allClusters.length > 0" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <!-- 왼쪽: 클러스터 목록 및 검색 -->
-            <aside class="lg:col-span-1 bg-gray-800/50 p-6 rounded-xl border border-gray-700 self-start sticky top-8">
-                <!-- ... (이전과 동일) ... -->
+        <!-- 메인 컨텐츠 (클러스터 정보가 있을 때만 표시) -->
+        <main v-if="allClusters.length > 0 && !connecting && !error" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- 왼쪽 패널: 클러스터 목록 및 검색 -->
+            <aside class="lg:col-span-1 bg-gray-800/50 p-6 rounded-xl border border-gray-700 self-start lg:sticky lg:top-8 shadow-lg h-full max-h-[calc(100vh-120px)] flex flex-col">
+                <h2 class="text-2xl font-semibold text-white mb-4">클러스터 탐색</h2>
+
+                <!-- 검색 입력 필드 -->
+                <div class="mb-4">
+                    <input
+                        type="text"
+                        v-model="searchTerm"
+                        placeholder="클러스터, 노드, 파드 검색..."
+                        class="w-full p-3 rounded-lg bg-gray-700 border border-gray-600 text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                    />
+                </div>
+
+                <!-- 검색 결과 또는 클러스터 목록 표시 -->
+                <div class="flex-grow overflow-y-auto pr-2 -mr-2">
+                    <div v-if="searchTerm && searchResults.length > 0">
+                        <h3 class="text-xl font-medium text-gray-300 mb-3">검색 결과 ({{ searchResults.length }})</h3>
+                        <ul class="space-y-3">
+                            <li v-for="(item, index) in searchResults" :key="item.id"
+                                @click="selectFromSearch(item)"
+                                :class="{'bg-blue-600/30 border-blue-500': selectedItem && selectedItem.id === item.id, 'hover:bg-gray-700/50': !(selectedItem && selectedItem.id === item.id)}"
+                                class="p-4 rounded-lg border border-gray-700 cursor-pointer transition-colors duration-200 animate-fade-in"
+                                :style="{ animationDelay: `${index * 0.05}s` }"
+                            >
+                                <div class="flex items-center space-x-3">
+                                    <span v-if="item.type === 'cluster'" class="text-blue-400 text-xl">🌐</span>
+                                    <span v-else-if="item.type === 'node'" class="text-green-400 text-xl">🖥️</span>
+                                    <span v-else-if="item.type === 'pod'" class="text-purple-400 text-xl">📦</span>
+                                    <div>
+                                        <p class="font-semibold text-white">{{ item.name }}</p>
+                                        <p class="text-sm text-gray-400">
+                                            <span class="capitalize">{{ item.type }}</span>
+                                            <span v-if="item.type !== 'cluster'"> ({{ item.cluster_name }})</span>
+                                        </p>
+                                    </div>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+                    <div v-else-if="searchTerm && searchResults.length === 0">
+                        <p class="text-gray-400 text-center py-5">검색 결과가 없습니다.</p>
+                    </div>
+                    <div v-else>
+                        <h3 class="text-xl font-medium text-gray-300 mb-3">전체 클러스터 ({{ allClusters.length }})</h3>
+                        <ul class="space-y-3">
+                            <li v-for="(cluster, index) in allClusters" :key="cluster.name"
+                                @click="selectCluster(cluster)"
+                                :class="{'bg-blue-600/30 border-blue-500': selectedItem && selectedItem.type === 'cluster' && selectedItem.data.name === cluster.name, 'hover:bg-gray-700/50': !(selectedItem && selectedItem.type === 'cluster' && selectedItem.data.name === cluster.name)}"
+                                class="p-4 rounded-lg border border-gray-700 cursor-pointer transition-colors duration-200 animate-fade-in"
+                                :style="{ animationDelay: `${index * 0.05}s` }"
+                            >
+                                <div class="flex justify-between items-center">
+                                    <div>
+                                        <p class="font-semibold text-white text-lg">{{ cluster.name }}</p>
+                                        <p class="text-sm text-gray-400">{{ cluster.node_count }} 노드, {{ cluster.pod_count }} 파드</p>
+                                    </div>
+                                    <span class="text-blue-400 text-2xl">🌐</span>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
             </aside>
-            <!-- 오른쪽: 상세 정보 뷰 -->
-            <section class="lg:col-span-2">
-                <!-- ... (이전과 동일) ... -->
+
+            <!-- 오른쪽 패널: 상세 정보 뷰 -->
+            <section class="lg:col-span-2 bg-gray-800/50 p-6 rounded-xl border border-gray-700 shadow-lg">
+                <div v-if="!selectedItem" class="text-center py-20">
+                    <p class="text-2xl text-gray-400">왼쪽에서 클러스터, 노드 또는 파드를 선택해주세요.</p>
+                    <p class="text-md text-gray-500 mt-2">실시간 데이터를 확인하고 상세 정보를 탐색할 수 있습니다.</p>
+                </div>
+
+                <!-- 클러스터 상세 정보 -->
+                <div v-if="selectedItem && selectedItem.type === 'cluster'" class="animate-fade-in">
+                    <h2 class="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-600 mb-6">
+                        🌐 클러스터: {{ selectedItem.data.name }}
+                    </h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">노드 수</p>
+                            <p class="text-white text-3xl font-bold">{{ selectedItem.data.node_count }}</p>
+                        </div>
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">파드 수</p>
+                            <p class="text-white text-3xl font-bold">{{ selectedItem.data.pod_count }}</p>
+                        </div>
+                    </div>
+
+                    <h3 class="text-2xl font-semibold text-white mb-4">노드 목록 ({{ selectedItem.data.nodes.length }})</h3>
+                    <div class="space-y-4 max-h-[400px] overflow-y-auto pr-2 -mr-2">
+                        <div v-for="(node, index) in selectedItem.data.nodes" :key="node.name"
+                            @click="selectNode(node)"
+                            :class="{'bg-blue-700/40 border-blue-600': selectedItem.type === 'node' && selectedItem.data.name === node.name, 'hover:bg-gray-700/50': !(selectedItem.type === 'node' && selectedItem.data.name === node.name)}"
+                            class="p-4 rounded-lg border border-gray-700 cursor-pointer transition-colors duration-200 animate-fade-in"
+                            :style="{ animationDelay: `${index * 0.05}s` }"
+                        >
+                            <div class="flex justify-between items-center">
+                                <div>
+                                    <p class="font-semibold text-white text-lg">{{ node.name }}</p>
+                                    <p class="text-sm text-gray-400">{{ node.pod_count }} 파드, {{ node.container_count }} 컨테이너</p>
+                                </div>
+                                <span class="text-green-400 text-2xl">🖥️</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 노드 상세 정보 -->
+                <div v-else-if="selectedItem && selectedItem.type === 'node'" class="animate-fade-in">
+                    <h2 class="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-teal-600 mb-6">
+                        🖥️ 노드: {{ selectedItem.data.name }}
+                    </h2>
+                    <p class="text-gray-400 mb-4">클러스터: <span class="font-medium text-blue-400">{{ selectedItem.data.cluster_name }}</span></p>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">OS 이미지</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.os_image }}</p>
+                        </div>
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">Kubelet 버전</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.kubelet_version }}</p>
+                        </div>
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">아키텍처</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.architecture }}</p>
+                        </div>
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">CPU 용량</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.capacity_cpu }}</p>
+                        </div>
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">메모리 용량</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.capacity_memory }}</p>
+                        </div>
+                        <div v-if="selectedItem.data.gpu_count !== '0'" class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">GPU 정보</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.gpu_model }} ({{ selectedItem.data.gpu_count }}개)</p>
+                        </div>
+                        <div v-if="Object.keys(selectedItem.data.mig_devices).length > 0" class="bg-gray-700/50 p-5 rounded-lg border border-gray-600 col-span-full">
+                            <p class="text-gray-400 text-sm mb-2">MIG 디바이스</p>
+                            <ul class="list-disc list-inside text-white text-lg">
+                                <li v-for="(count, profile) in selectedItem.data.mig_devices" :key="profile">
+                                    {{ profile }}: {{ count }}
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <h3 class="text-2xl font-semibold text-white mb-4">파드 목록 ({{ selectedItem.data.pods.length }})</h3>
+                    <div class="space-y-4 max-h-[400px] overflow-y-auto pr-2 -mr-2">
+                        <div v-for="(pod, index) in selectedItem.data.pods" :key="pod.name"
+                            @click="selectPod(pod)"
+                            :class="{'bg-blue-700/40 border-blue-600': selectedItem.type === 'pod' && selectedItem.data.name === pod.name, 'hover:bg-gray-700/50': !(selectedItem.type === 'pod' && selectedItem.data.name === pod.name)}"
+                            class="p-4 rounded-lg border border-gray-700 cursor-pointer transition-colors duration-200 animate-fade-in"
+                            :style="{ animationDelay: `${index * 0.05}s` }"
+                        >
+                            <div class="flex justify-between items-center">
+                                <div>
+                                    <p class="font-semibold text-white text-lg">{{ pod.name }}</p>
+                                    <p class="text-sm text-gray-400">네임스페이스: {{ pod.namespace }}</p>
+                                </div>
+                                <span class="text-purple-400 text-2xl">📦</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 파드 상세 정보 -->
+                <div v-else-if="selectedItem && selectedItem.type === 'pod'" class="animate-fade-in">
+                    <h2 class="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600 mb-6">
+                        📦 파드: {{ selectedItem.data.name }}
+                    </h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">클러스터</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.cluster_name }}</p>
+                        </div>
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">네임스페이스</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.namespace }}</p>
+                        </div>
+                        <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">노드</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.node_name }}</p>
+                        </div>
+                    </div>
+
+                    <h3 class="text-2xl font-semibold text-white mb-4">컨테이너 목록 ({{ selectedItem.data.containers.length }})</h3>
+                    <div class="space-y-4 max-h-[400px] overflow-y-auto pr-2 -mr-2">
+                        <div v-for="(container, index) in selectedItem.data.containers" :key="container.name"
+                            class="p-4 rounded-lg bg-gray-700/50 border border-gray-600 animate-fade-in"
+                            :style="{ animationDelay: `${index * 0.05}s` }"
+                        >
+                            <p class="font-semibold text-white text-lg">{{ container.name }}</p>
+                            <p class="text-sm text-gray-400">이미지: {{ container.image }}</p>
+                        </div>
+                        <p v-if="selectedItem.data.containers.length === 0" class="text-gray-400 text-center py-5">
+                            이 파드에는 컨테이너가 없습니다.
+                        </p>
+                    </div>
+
+                    <h3 class="text-2xl font-semibold text-white mt-8 mb-4">라벨</h3>
+                    <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2">
+                        <div v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 flex justify-between items-center">
+                            <span class="font-medium text-gray-300">{{ key }}</span>
+                            <span class="text-white text-right break-all ml-4">{{ value }}</span>
+                        </div>
+                    </div>
+                    <p v-else class="text-gray-400 text-center py-5">
+                        이 파드에는 라벨이 없습니다.
+                    </p>
+                </div>
             </section>
         </main>
     </div>
@@ -54,11 +272,12 @@
         createApp({
             setup() {
                 const allClusters = ref([]);
-                const connecting = ref(true); // loading -> connecting
-                const error = ref(null);
-                const searchTerm = ref('');
-                const selectedItem = ref(null);
+                const connecting = ref(true); // 로딩 상태
+                const error = ref(null); // 오류 메시지
+                const searchTerm = ref(''); // 검색어
+                const selectedItem = ref(null); // 현재 선택된 클러스터/노드/파드
 
+                // WebSocket 연결 함수
                 const connectWebSocket = () => {
                     // 현재 페이지의 프로토콜(http/https)에 맞춰 ws/wss를 동적으로 선택
                     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -89,12 +308,29 @@
                             }
 
                             // 선택된 항목이 있다면, 새 데이터로 업데이트
-                            if (selectedItem.value && selectedItem.value.data.cluster_name === newClusterData.name) {
-                                // (이전과 동일한 업데이트 로직)
+                            if (selectedItem.value) {
+                                if (selectedItem.value.type === 'cluster' && selectedItem.value.data.name === newClusterData.name) {
+                                    selectedItem.value.data = newClusterData;
+                                } else if (selectedItem.value.type === 'node') {
+                                    const updatedNode = newClusterData.nodes.find(n => n.name === selectedItem.value.data.name);
+                                    if (updatedNode) {
+                                        selectedItem.value.data = updatedNode;
+                                    }
+                                } else if (selectedItem.value.type === 'pod') {
+                                    // 파드의 경우, 해당 파드가 속한 노드를 찾고 그 노드에서 파드를 찾아서 업데이트
+                                    const updatedNode = newClusterData.nodes.find(n => n.name === selectedItem.value.data.node_name);
+                                    if (updatedNode) {
+                                        const updatedPod = updatedNode.pods.find(p => p.name === selectedItem.value.data.name);
+                                        if (updatedPod) {
+                                            selectedItem.value.data = updatedPod;
+                                        }
+                                    }
+                                }
                             }
 
                         } catch (e) {
                             console.error("수신된 데이터 처리 오류:", e);
+                            error.value = "수신된 데이터를 처리하는 중 오류가 발생했습니다.";
                         }
                     };
 
@@ -107,17 +343,99 @@
                     socket.onclose = () => {
                         console.log("WebSocket 연결이 종료되었습니다.");
                         // 필요하다면 여기서 재연결 로직을 구현할 수 있습니다.
+                        // 예: setTimeout(connectWebSocket, 3000);
                     };
                 };
 
+                // 컴포넌트 마운트 시 WebSocket 연결 시작
                 onMounted(connectWebSocket);
 
-                // (검색 및 선택 로직은 이전과 동일)
-                const searchResults = computed(() => { /* ... */ });
-                function selectCluster(cluster) { /* ... */ }
-                function selectNode(node) { /* ... */ }
-                function selectPod(pod) { /* ... */ }
-                function selectFromSearch(item) { /* ... */ }
+                // 검색 결과 계산 (computed 속성)
+                const searchResults = computed(() => {
+                    const term = searchTerm.value.toLowerCase();
+                    if (!term) return [];
+
+                    const results = [];
+                    allClusters.value.forEach(cluster => {
+                        // 클러스터 이름 검색
+                        if (cluster.name.toLowerCase().includes(term)) {
+                            results.push({ id: `cluster-${cluster.name}`, type: 'cluster', name: cluster.name, data: cluster });
+                        }
+
+                        cluster.nodes.forEach(node => {
+                            // 노드 이름 검색
+                            if (node.name.toLowerCase().includes(term)) {
+                                results.push({ id: `node-${cluster.name}-${node.name}`, type: 'node', name: node.name, cluster_name: cluster.name, data: node });
+                            }
+
+                            // 노드 라벨 검색
+                            for (const key in node.labels) {
+                                if (key.toLowerCase().includes(term) || node.labels[key].toLowerCase().includes(term)) {
+                                    results.push({ id: `node-label-${cluster.name}-${node.name}-${key}`, type: 'node', name: `${node.name} (Label: ${key}=${node.labels[key]})`, cluster_name: cluster.name, data: node });
+                                    break; // 중복 방지를 위해 첫 번째 일치하는 라벨에서 중단
+                                }
+                            }
+
+                            node.pods.forEach(pod => {
+                                // 파드 이름 검색
+                                if (pod.name.toLowerCase().includes(term)) {
+                                    results.push({ id: `pod-${cluster.name}-${node.name}-${pod.name}`, type: 'pod', name: pod.name, cluster_name: cluster.name, node_name: node.name, data: pod });
+                                }
+
+                                // 파드 네임스페이스 검색
+                                if (pod.namespace.toLowerCase().includes(term)) {
+                                    results.push({ id: `pod-ns-${cluster.name}-${node.name}-${pod.name}`, type: 'pod', name: `${pod.name} (NS: ${pod.namespace})`, cluster_name: cluster.name, node_name: node.name, data: pod });
+                                }
+
+                                // 파드 라벨 검색
+                                for (const key in pod.labels) {
+                                    if (key.toLowerCase().includes(term) || pod.labels[key].toLowerCase().includes(term)) {
+                                        results.push({ id: `pod-label-${cluster.name}-${node.name}-${pod.name}-${key}`, type: 'pod', name: `${pod.name} (Label: ${key}=${pod.labels[key]})`, cluster_name: cluster.name, node_name: node.name, data: pod });
+                                        break;
+                                    }
+                                }
+
+                                pod.containers.forEach(container => {
+                                    // 컨테이너 이름 검색
+                                    if (container.name.toLowerCase().includes(term)) {
+                                        results.push({ id: `container-${cluster.name}-${node.name}-${pod.name}-${container.name}`, type: 'pod', name: `${pod.name} (Container: ${container.name})`, cluster_name: cluster.name, node_name: node.name, data: pod });
+                                    }
+                                    // 컨테이너 이미지 검색
+                                    if (container.image.toLowerCase().includes(term)) {
+                                        results.push({ id: `container-image-${cluster.name}-${node.name}-${pod.name}-${container.name}`, type: 'pod', name: `${pod.name} (Image: ${container.image})`, cluster_name: cluster.name, node_name: node.name, data: pod });
+                                    }
+                                });
+                            });
+                        });
+                    });
+                    // 중복 제거 (id 기준)
+                    const uniqueResults = Array.from(new Map(results.map(item => [item.id, item])).values());
+                    return uniqueResults;
+                });
+
+                // 클러스터 선택 함수
+                function selectCluster(cluster) {
+                    selectedItem.value = { type: 'cluster', data: cluster };
+                    searchTerm.value = ''; // 검색어 초기화
+                }
+
+                // 노드 선택 함수
+                function selectNode(node) {
+                    selectedItem.value = { type: 'node', data: node };
+                    searchTerm.value = ''; // 검색어 초기화
+                }
+
+                // 파드 선택 함수
+                function selectPod(pod) {
+                    selectedItem.value = { type: 'pod', data: pod };
+                    searchTerm.value = ''; // 검색어 초기화
+                }
+
+                // 검색 결과에서 항목 선택 함수
+                function selectFromSearch(item) {
+                    selectedItem.value = item;
+                    searchTerm.value = ''; // 검색어 초기화
+                }
 
                 return {
                     connecting, error, searchTerm, allClusters, searchResults, selectedItem,
