@@ -10,11 +10,11 @@ use kube::{
     config::{KubeConfigOptions, Kubeconfig},
     Api, Client, Config,
 };
-use log::{info, warn, error}; // error 로깅을 위해 추가
+use log::{info, warn, error};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-// use std::time::Duration; // 'Duration'은 사용되지 않아 제거
+use std::time::Duration; // Duration 사용을 위해 다시 추가
 
 // --- 데이터 모델 (변경 없음) ---
 #[derive(Serialize, Deserialize, Clone, Debug, Message)]
@@ -50,6 +50,11 @@ struct PodInfo {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ContainerInfo { name: String, image: String }
 
+// 주기적인 클러스터 정보 조회를 위한 메시지 정의
+#[derive(Message)]
+#[rtype(result = "()")]
+struct FetchClusterInfo;
+
 /// WebSocket 연결을 처리할 Actor 정의
 struct MyWebSocket {
     kube_contexts: Arc<KubeContexts>,
@@ -62,13 +67,13 @@ impl Actor for MyWebSocket {
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("WebSocket 연결 시작됨.");
 
-        // 클라이언트에게 데이터를 보낼 수 있도록 자신의 주소(Addr)를 복제
-        let addr = ctx.address();
-        let contexts_clone = self.kube_contexts.clone();
+        // 초기 데이터 조회 요청
+        ctx.address().do_send(FetchClusterInfo);
 
-        // 데이터 조회는 오래 걸릴 수 있으므로, 별도의 비동기 작업으로 분리
-        actix_web::rt::spawn(async move {
-            fetch_and_stream_data(contexts_clone, addr).await;
+        // 매 5분(300초)마다 FetchClusterInfo 메시지를 자신에게 보내도록 스케줄링
+        ctx.run_interval(Duration::from_secs(300), |act, ctx| { // 30초 -> 300초로 변경
+            info!("주기적인 클러스터 정보 조회 트리거됨.");
+            act.kube_contexts.clone().do_send(FetchClusterInfo); // ActorContext를 통해 메시지 전송
         });
     }
 }
@@ -101,6 +106,22 @@ impl Handler<ClusterInfo> for MyWebSocket {
         }
     }
 }
+
+// FetchClusterInfo 메시지를 처리하는 핸들러 추가
+impl Handler<FetchClusterInfo> for MyWebSocket {
+    type Result = ();
+
+    fn handle(&mut self, _msg: FetchClusterInfo, ctx: &mut Self::Context) {
+        let addr = ctx.address();
+        let contexts_clone = self.kube_contexts.clone();
+
+        // 데이터 조회는 오래 걸릴 수 있으므로, 별도의 비동기 작업으로 분리
+        actix_web::rt::spawn(async move {
+            fetch_and_stream_data(contexts_clone, addr).await;
+        });
+    }
+}
+
 
 /// 클러스터 정보를 조회하고 웹소켓 액터에게 메시지를 보내는 함수
 async fn fetch_and_stream_data(kube_contexts: Arc<KubeContexts>, addr: Addr<MyWebSocket>) {
@@ -212,17 +233,17 @@ async fn main() -> std::io::Result<()> {
         warn!("⚠️ Kubeconfig 파일을 읽는 데 실패했습니다. 기본 설정으로 진행합니다.");
     }
 
-    // --- 사전 접속 테스트 로직 추가 ---
+    // --- 사전 접속 테스트 로직 ---
     info!("--- 클러스터 사전 접속 테스트 시작 ---");
     let mut successfully_connected_contexts = HashMap::new();
-    for (context_name, client) in contexts.drain() { // contexts를 소유권 이전하며 순회
+    for (context_name, client) in contexts.drain() {
         let nodes_api: Api<Node> = Api::all(client.clone());
-        let lp = ListParams::default().limit(1); // 가벼운 테스트를 위해 1개만 요청
+        let lp = ListParams::default().limit(1);
 
         match nodes_api.list(&lp).await {
             Ok(_) => {
                 info!("✅ [Context: {}] Kubernetes API 서버에 성공적으로 접속했습니다.", context_name);
-                successfully_connected_contexts.insert(context_name, client); // 성공한 클라이언트만 다시 저장
+                successfully_connected_contexts.insert(context_name, client);
             },
             Err(e) => {
                 error!("❌ [Context: {}] Kubernetes API 서버 접속 테스트 실패: {}", context_name, e);
@@ -237,7 +258,7 @@ async fn main() -> std::io::Result<()> {
     // 만약 접속 가능한 클러스터가 하나도 없다면 서버를 시작하지 않거나 경고
     if kube_contexts.contexts.is_empty() {
         error!("🚨 접속 가능한 Kubernetes 클러스터가 없습니다. 서버를 시작하지 않습니다.");
-        return Ok(()); // 서버 시작을 중단
+        return Ok(());
     }
 
     info!("\n🚀 서버 시작: http://127.0.0.1:8080");
