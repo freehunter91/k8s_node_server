@@ -1,5 +1,5 @@
 // actix 및 웹소켓 관련 라이브러리 추가
-use actix::{Actor, Addr, AsyncContext, Handler, Message, StreamHandler};
+use actix::{Actor, Addr, AsyncContext, Handler, Message, StreamHandler, ActorContext}; // ActorContext 추가
 use actix_cors::Cors;
 use actix_files as fs;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer}; // 'get'은 사용되지 않아 제거
