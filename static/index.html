@@ -6,6 +6,8 @@
     <title>Kubernetes 통합 대시보드</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- [추가] 엑셀 파일 생성을 위한 SheetJS 라이브러리 -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
     <style>
         /* 기본 글꼴 설정 */
         body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
@@ -116,7 +118,6 @@
 
             <!-- 오른쪽 패널: 상세 정보 뷰 -->
             <section class="lg:col-span-2 bg-gray-800/50 p-6 rounded-xl border border-gray-700 shadow-lg relative">
-                <!-- [수정] 뒤로가기 버튼 -->
                 <button v-if="selectedItem" @click="goBackToMain" class="absolute top-4 right-4 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200 z-10">
                     ← 뒤로 가기
                 </button>
@@ -139,6 +140,13 @@
                         <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
                             <p class="text-gray-400 text-sm">파드 수</p>
                             <p class="text-white text-3xl font-bold">{{ selectedItem.data.pod_count }}</p>
+                        </div>
+                        <!-- [추가] 엑셀 내보내기 버튼 -->
+                        <div class="md:col-span-2">
+                             <button @click="exportClusterData" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center space-x-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                <span>엑셀로 내보내기</span>
+                            </button>
                         </div>
                     </div>
 
@@ -189,7 +197,6 @@
                             <p class="text-gray-400 text-sm">메모리 용량</p>
                             <p class="text-white text-lg font-medium">{{ selectedItem.data.capacity_memory }}</p>
                         </div>
-                        <!-- GPU 정보 섹션 -->
                         <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
                             <p class="text-gray-400 text-sm">GPU 정보</p>
                             <p class="text-white text-lg font-medium">
@@ -211,7 +218,6 @@
                         </div>
                     </div>
 
-                    <!-- 노드 라벨 섹션 -->
                     <h3 class="text-2xl font-semibold text-white mt-8 mb-4">라벨</h3>
                     <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2">
                         <div v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 flex justify-between items-center">
@@ -276,7 +282,6 @@
                         </p>
                     </div>
 
-                    <!-- 파드 라벨 섹션 -->
                     <h3 class="text-2xl font-semibold text-white mt-8 mb-4">라벨</h3>
                     <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2">
                         <div v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 flex justify-between items-center">
@@ -293,7 +298,7 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted, onUnmounted, computed, watch } = Vue; // onUnmounted 추가
+        const { createApp, ref, onMounted, onUnmounted, computed, watch } = Vue;
 
         createApp({
             setup() {
@@ -306,9 +311,7 @@
                 const selectedItem = ref(null);
 
                 watch(searchTerm, (newTerm) => {
-                    if (debounceTimeout) {
-                        clearTimeout(debounceTimeout);
-                    }
+                    if (debounceTimeout) clearTimeout(debounceTimeout);
                     debounceTimeout = setTimeout(() => {
                         debouncedSearchTerm.value = newTerm;
                     }, 300);
@@ -328,7 +331,6 @@
                     socket.onmessage = (event) => {
                         try {
                             const newClusterData = JSON.parse(event.data);
-                            console.log("수신된 클러스터:", newClusterData.name);
                             const index = allClusters.value.findIndex(c => c.name === newClusterData.name);
                             if (index !== -1) {
                                 allClusters.value[index] = newClusterData;
@@ -340,16 +342,12 @@
                                     selectedItem.value.data = newClusterData;
                                 } else if (selectedItem.value.type === 'node') {
                                     const updatedNode = newClusterData.nodes.find(n => n.name === selectedItem.value.data.name);
-                                    if (updatedNode) {
-                                        selectedItem.value.data = updatedNode;
-                                    }
+                                    if (updatedNode) selectedItem.value.data = updatedNode;
                                 } else if (selectedItem.value.type === 'pod') {
                                     const updatedNode = newClusterData.nodes.find(n => n.name === selectedItem.value.data.node_name);
                                     if (updatedNode) {
                                         const updatedPod = updatedNode.pods.find(p => p.name === selectedItem.value.data.name);
-                                        if (updatedPod) {
-                                            selectedItem.value.data = updatedPod;
-                                        }
+                                        if (updatedPod) selectedItem.value.data = updatedPod;
                                     }
                                 }
                             }
@@ -366,32 +364,25 @@
                     };
 
                     socket.onclose = () => {
-                        console.log("WebSocket 연결이 종료되었습니다.");
-                        console.log("WebSocket 재연결 시도 중...");
+                        console.log("WebSocket 연결이 종료되었습니다. 3초 후 재연결을 시도합니다.");
                         connecting.value = true;
                         setTimeout(connectWebSocket, 3000);
                     };
                 };
 
-                // [수정] 뒤로가기 함수
-                function goBackToMain() {
-                    selectedItem.value = null;
-                }
+                const goBackToMain = () => selectedItem.value = null;
 
-                // [수정] ESC 키 이벤트 핸들러
                 const handleEscKey = (event) => {
-                    if (event.key === 'Escape') {
-                        goBackToMain();
-                    }
+                    if (event.key === 'Escape') goBackToMain();
                 };
 
                 onMounted(() => {
                     connectWebSocket();
-                    window.addEventListener('keydown', handleEscKey); // 이벤트 리스너 등록
+                    window.addEventListener('keydown', handleEscKey);
                 });
 
                 onUnmounted(() => {
-                    window.removeEventListener('keydown', handleEscKey); // 컴포넌트 해제 시 리스너 제거
+                    window.removeEventListener('keydown', handleEscKey);
                 });
 
                 const searchResults = computed(() => {
@@ -406,33 +397,10 @@
                             if (node.name.toLowerCase().includes(term)) {
                                 results.push({ id: `node-${cluster.name}-${node.name}`, type: 'node', name: node.name, cluster_name: cluster.name, data: node });
                             }
-                            for (const key in node.labels) {
-                                if (key.toLowerCase().includes(term) || node.labels[key].toLowerCase().includes(term)) {
-                                    results.push({ id: `node-label-${cluster.name}-${node.name}-${key}`, type: 'node', name: `${node.name} (Label: ${key}=${node.labels[key]})`, cluster_name: cluster.name, data: node });
-                                    break;
-                                }
-                            }
                             node.pods.forEach(pod => {
                                 if (pod.name.toLowerCase().includes(term)) {
                                     results.push({ id: `pod-${cluster.name}-${node.name}-${pod.name}`, type: 'pod', name: pod.name, cluster_name: cluster.name, node_name: node.name, data: pod });
                                 }
-                                if (pod.namespace.toLowerCase().includes(term)) {
-                                    results.push({ id: `pod-ns-${cluster.name}-${node.name}-${pod.name}`, type: 'pod', name: `${pod.name} (NS: ${pod.namespace})`, cluster_name: cluster.name, node_name: node.name, data: pod });
-                                }
-                                for (const key in pod.labels) {
-                                    if (key.toLowerCase().includes(term) || pod.labels[key].toLowerCase().includes(term)) {
-                                        results.push({ id: `pod-label-${cluster.name}-${node.name}-${pod.name}-${key}`, type: 'pod', name: `${pod.name} (Label: ${key}=${pod.labels[key]})`, cluster_name: cluster.name, node_name: node.name, data: pod });
-                                        break;
-                                    }
-                                }
-                                pod.containers.forEach(container => {
-                                    if (container.name.toLowerCase().includes(term)) {
-                                        results.push({ id: `container-${cluster.name}-${node.name}-${pod.name}-${container.name}`, type: 'pod', name: `${pod.name} (Container: ${container.name})`, cluster_name: cluster.name, node_name: node.name, data: pod });
-                                    }
-                                    if (container.image.toLowerCase().includes(term)) {
-                                        results.push({ id: `container-image-${cluster.name}-${node.name}-${pod.name}-${container.name}`, type: 'pod', name: `${pod.name} (Image: ${container.image})`, cluster_name: cluster.name, node_name: node.name, data: pod });
-                                    }
-                                });
                             });
                         });
                     });
@@ -440,30 +408,130 @@
                     return uniqueResults;
                 });
 
-                function selectCluster(cluster) {
-                    selectedItem.value = { type: 'cluster', data: cluster };
+                const selectCluster = (cluster) => {
+                    selectedItem.value = { type: 'cluster', data: cluster, id: `cluster-${cluster.name}` };
                     searchTerm.value = '';
-                }
+                };
 
-                function selectNode(node) {
-                    selectedItem.value = { type: 'node', data: node };
+                const selectNode = (node) => {
+                    selectedItem.value = { type: 'node', data: node, id: `node-${node.cluster_name}-${node.name}` };
                     searchTerm.value = '';
-                }
+                };
 
-                function selectPod(pod) {
-                    selectedItem.value = { type: 'pod', data: pod };
+                const selectPod = (pod) => {
+                    selectedItem.value = { type: 'pod', data: pod, id: `pod-${pod.cluster_name}-${pod.node_name}-${pod.name}` };
                     searchTerm.value = '';
-                }
+                };
 
-                function selectFromSearch(item) {
+                const selectFromSearch = (item) => {
                     selectedItem.value = item;
                     searchTerm.value = '';
-                }
+                };
+
+                // [추가] 엑셀 내보내기 함수
+                const exportClusterData = () => {
+                    if (!selectedItem.value || selectedItem.value.type !== 'cluster') return;
+                    const cluster = selectedItem.value.data;
+                    
+                    // 1. 노드 스펙 시트 데이터 생성
+                    const nodeSpecsData = cluster.nodes.map(node => ({
+                        '클러스터': node.cluster_name,
+                        '노드 이름': node.name,
+                        'OS 이미지': node.os_image,
+                        'Kubelet 버전': node.kubelet_version,
+                        '아키텍처': node.architecture,
+                        'CPU 용량': node.capacity_cpu,
+                        '메모리 용량': node.capacity_memory,
+                        'GPU 모델': node.gpu_model,
+                        'GPU 개수': node.gpu_count,
+                        'MIG 디바이스': Object.keys(node.mig_devices).length > 0 ? JSON.stringify(node.mig_devices) : 'N/A'
+                    }));
+
+                    // 2. 노드 & 파드 상세 정보 시트 데이터 생성
+                    const nodePodDetailsData = [];
+                    cluster.nodes.forEach(node => {
+                        // 노드 정보 추가
+                        nodePodDetailsData.push({
+                            '클러스터': cluster.name,
+                            '리소스 타입': 'Node',
+                            '리소스 이름': node.name,
+                            '네임스페이스': '',
+                            '상세 타입': 'Info',
+                            '키': 'Pod Count',
+                            '값': node.pod_count
+                        });
+
+                        // 노드 라벨 추가
+                        for (const [key, value] of Object.entries(node.labels)) {
+                            nodePodDetailsData.push({
+                                '클러스터': cluster.name,
+                                '리소스 타입': 'Node',
+                                '리소스 이름': node.name,
+                                '네임스페이스': '',
+                                '상세 타입': 'Label',
+                                '키': key,
+                                '값': value
+                            });
+                        }
+
+                        // 파드 정보 및 라벨 추가
+                        node.pods.forEach(pod => {
+                            nodePodDetailsData.push({
+                                '클러스터': cluster.name,
+                                '리소스 타입': 'Pod',
+                                '리소스 이름': pod.name,
+                                '네임스페이스': pod.namespace,
+                                '상세 타입': 'Info',
+                                '키': 'Node',
+                                '값': pod.node_name
+                            });
+                             for (const [key, value] of Object.entries(pod.labels)) {
+                                nodePodDetailsData.push({
+                                    '클러스터': cluster.name,
+                                    '리소스 타입': 'Pod',
+                                    '리소스 이름': pod.name,
+                                    '네임스페이스': pod.namespace,
+                                    '상세 타입': 'Label',
+                                    '키': key,
+                                    '값': value
+                                });
+                            }
+                        });
+                    });
+
+                    // 3. 워크북 및 시트 생성
+                    const wb = XLSX.utils.book_new();
+                    const wsSpecs = XLSX.utils.json_to_sheet(nodeSpecsData);
+                    const wsDetails = XLSX.utils.json_to_sheet(nodePodDetailsData);
+
+                    // 시트 컬럼 너비 자동 조정
+                    const fitToColumn = (ws) => {
+                        const colWidths = [];
+                        const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+                        data.forEach(row => {
+                            row.forEach((cell, i) => {
+                                const cellValue = cell ? String(cell) : '';
+                                colWidths[i] = Math.max(colWidths[i] || 0, cellValue.length);
+                            });
+                        });
+                        ws['!cols'] = colWidths.map(width => ({ wch: width + 2 }));
+                    };
+                    
+                    fitToColumn(wsSpecs);
+                    fitToColumn(wsDetails);
+
+                    XLSX.utils.book_append_sheet(wb, wsSpecs, "Node Specs");
+                    XLSX.utils.book_append_sheet(wb, wsDetails, "Node & Pod Details");
+
+                    // 4. 파일 다운로드
+                    XLSX.writeFile(wb, `${cluster.name}_cluster_details.xlsx`);
+                };
 
                 return {
                     connecting, error, searchTerm, allClusters, searchResults, selectedItem,
                     selectCluster, selectNode, selectPod, selectFromSearch,
-                    goBackToMain, // [수정] 템플릿에서 사용할 수 있도록 반환
+                    goBackToMain,
+                    exportClusterData, // [추가] 엑셀 내보내기 함수 반환
                 };
             }
         }).mount('#app');
