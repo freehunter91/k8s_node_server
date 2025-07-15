@@ -184,7 +184,7 @@
                             <p class="text-gray-400 text-sm">메모리 용량</p>
                             <p class="text-white text-lg font-medium">{{ selectedItem.data.capacity_memory }}</p>
                         </div>
-                        <!-- GPU 정보 섹션: GPU 수량만 표시하도록 로직 개선 -->
+                        <!-- GPU 정보 섹션 -->
                         <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
                             <p class="text-gray-400 text-sm">GPU 정보</p>
                             <p class="text-white text-lg font-medium">
@@ -288,19 +288,30 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted, computed } = Vue;
+        const { createApp, ref, onMounted, computed, watch } = Vue; // watch 추가
 
         createApp({
             setup() {
                 const allClusters = ref([]);
-                const connecting = ref(true); // 로딩 상태
-                const error = ref(null); // 오류 메시지
-                const searchTerm = ref(''); // 검색어
-                const selectedItem = ref(null); // 현재 선택된 클러스터/노드/파드
+                const connecting = ref(true);
+                const error = ref(null);
+                const searchTerm = ref('');
+                const debouncedSearchTerm = ref(''); // 디바운싱된 검색어
+                let debounceTimeout = null; // 디바운싱 타이머 ID
+                const selectedItem = ref(null);
 
-                // WebSocket 연결 함수
+                // searchTerm 변경 감지 및 디바운싱 적용
+                watch(searchTerm, (newTerm) => {
+                    if (debounceTimeout) {
+                        clearTimeout(debounceTimeout);
+                    }
+                    debounceTimeout = setTimeout(() => {
+                        debouncedSearchTerm.value = newTerm;
+                    }, 300); // 300ms 동안 입력이 없으면 검색 실행
+                });
+
+
                 const connectWebSocket = () => {
-                    // 현재 페이지의 프로토콜(http/https)에 맞춰 ws/wss를 동적으로 선택
                     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                     const wsUrl = `${wsProtocol}//${window.location.host}/ws/`;
 
@@ -317,18 +328,14 @@
                             const newClusterData = JSON.parse(event.data);
                             console.log("수신된 클러스터:", newClusterData.name);
 
-                            // 기존에 클러스터가 있는지 확인
                             const index = allClusters.value.findIndex(c => c.name === newClusterData.name);
 
                             if (index !== -1) {
-                                // 있으면 데이터 업데이트
                                 allClusters.value[index] = newClusterData;
                             } else {
-                                // 없으면 새로 추가
                                 allClusters.value.push(newClusterData);
                             }
 
-                            // 선택된 항목이 있다면, 새 데이터로 업데이트
                             if (selectedItem.value) {
                                 if (selectedItem.value.type === 'cluster' && selectedItem.value.data.name === newClusterData.name) {
                                     selectedItem.value.data = newClusterData;
@@ -338,7 +345,6 @@
                                         selectedItem.value.data = updatedNode;
                                     }
                                 } else if (selectedItem.value.type === 'pod') {
-                                    // 파드의 경우, 해당 파드가 속한 노드를 찾고 그 노드에서 파드를 찾아서 업데이트
                                     const updatedNode = newClusterData.nodes.find(n => n.name === selectedItem.value.data.node_name);
                                     if (updatedNode) {
                                         const updatedPod = updatedNode.pods.find(p => p.name === selectedItem.value.data.name);
@@ -363,17 +369,17 @@
 
                     socket.onclose = () => {
                         console.log("WebSocket 연결이 종료되었습니다.");
-                        // 필요하다면 여기서 재연결 로직을 구현할 수 있습니다.
-                        // 예: setTimeout(connectWebSocket, 3000);
+                        console.log("WebSocket 재연결 시도 중...");
+                        connecting.value = true;
+                        setTimeout(connectWebSocket, 3000);
                     };
                 };
 
-                // 컴포넌트 마운트 시 WebSocket 연결 시작
                 onMounted(connectWebSocket);
 
-                // 검색 결과 계산 (computed 속성)
+                // 검색 결과 계산 (computed 속성) - debouncedSearchTerm 사용
                 const searchResults = computed(() => {
-                    const term = searchTerm.value.toLowerCase();
+                    const term = debouncedSearchTerm.value.toLowerCase(); // debouncedSearchTerm 사용
                     if (!term) return [];
 
                     const results = [];
