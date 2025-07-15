@@ -198,7 +198,19 @@
                         </div>
                     </div>
 
-                    <h3 class="text-2xl font-semibold text-white mb-4">파드 목록 ({{ selectedItem.data.pods.length }})</h3>
+                    <!-- 노드 라벨 섹션 추가 -->
+                    <h3 class="text-2xl font-semibold text-white mt-8 mb-4">라벨</h3>
+                    <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2">
+                        <div v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 flex justify-between items-center">
+                            <span class="font-medium text-gray-300">{{ key }}</span>
+                            <span class="text-white text-right break-all ml-4">{{ value }}</span>
+                        </div>
+                    </div>
+                    <p v-else class="text-gray-400 text-center py-5">
+                        이 노드에는 라벨이 없습니다.
+                    </p>
+
+                    <h3 class="text-2xl font-semibold text-white mt-8 mb-4">파드 목록 ({{ selectedItem.data.pods.length }})</h3>
                     <div class="space-y-4 max-h-[400px] overflow-y-auto pr-2 -mr-2">
                         <div v-for="(pod, index) in selectedItem.data.pods" :key="pod.name"
                             @click="selectPod(pod)"
@@ -251,7 +263,7 @@
                         </p>
                     </div>
 
-                    <!-- 라벨 섹션 추가 -->
+                    <!-- 파드 라벨 섹션 -->
                     <h3 class="text-2xl font-semibold text-white mt-8 mb-4">라벨</h3>
                     <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2">
                         <div v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 flex justify-between items-center">
@@ -369,7 +381,7 @@
                                 results.push({ id: `node-${cluster.name}-${node.name}`, type: 'node', name: node.name, cluster_name: cluster.name, data: node });
                             }
 
-                            // 노드 라벨 검색
+                            // 노드 라벨 검색 (여기서 노드 라벨 검색을 추가했습니다)
                             for (const key in node.labels) {
                                 if (key.toLowerCase().includes(term) || node.labels[key].toLowerCase().includes(term)) {
                                     results.push({ id: `node-label-${cluster.name}-${node.name}-${key}`, type: 'node', name: `${node.name} (Label: ${key}=${node.labels[key]})`, cluster_name: cluster.name, data: node });
@@ -388,7 +400,7 @@
                                     results.push({ id: `pod-ns-${cluster.name}-${node.name}-${pod.name}`, type: 'pod', name: `${pod.name} (NS: ${pod.namespace})`, cluster_name: cluster.name, node_name: node.name, data: pod });
                                 }
 
-                                // 파드 라벨 검색 (여기서 라벨 검색을 추가했습니다)
+                                // 파드 라벨 검색
                                 for (const key in pod.labels) {
                                     if (key.toLowerCase().includes(term) || pod.labels[key].toLowerCase().includes(term)) {
                                         results.push({ id: `pod-label-${cluster.name}-${node.name}-${pod.name}-${key}`, type: 'pod', name: `${pod.name} (Label: ${key}=${pod.labels[key]})`, cluster_name: cluster.name, node_name: node.name, data: pod });
