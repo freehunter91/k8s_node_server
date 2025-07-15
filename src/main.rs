@@ -1,8 +1,8 @@
 // actix 및 웹소켓 관련 라이브러리 추가
-use actix::{Actor, Addr, AsyncContext, Handler, Message, StreamHandler, ActorContext}; // ActorContext 추가
+use actix::{Actor, Addr, AsyncContext, Handler, Message, StreamHandler, ActorContext};
 use actix_cors::Cors;
 use actix_files as fs;
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer}; // 'get'은 사용되지 않아 제거
+use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
 use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::{
@@ -10,7 +10,7 @@ use kube::{
     config::{KubeConfigOptions, Kubeconfig},
     Api, Client, Config,
 };
-use log::{info, warn}; // 'error'는 사용되지 않아 제거
+use log::{info, warn, error}; // error 로깅을 위해 추가
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -115,9 +115,9 @@ async fn fetch_and_stream_data(kube_contexts: Arc<KubeContexts>, addr: Addr<MyWe
 
         if let (Ok(nodes), Ok(pods)) = (nodes_res, pods_res) {
             let mut nodes_info = vec![];
-            for node in nodes.items { // .items를 추가하여 Vec<Node>를 순회
+            for node in nodes.items {
                 let node_name = node.metadata.name.clone().unwrap_or_default();
-                let node_pods: Vec<PodInfo> = pods.items.iter() // .items를 추가하여 Vec<Pod>를 순회
+                let node_pods: Vec<PodInfo> = pods.items.iter()
                     .filter(|p| p.spec.as_ref().and_then(|s| s.node_name.as_ref()) == Some(&node_name))
                     .map(|p| {
                         let containers = p.spec.as_ref().map(|s| s.containers.iter().map(|c| ContainerInfo {
@@ -212,7 +212,33 @@ async fn main() -> std::io::Result<()> {
         warn!("⚠️ Kubeconfig 파일을 읽는 데 실패했습니다. 기본 설정으로 진행합니다.");
     }
 
-    let kube_contexts = web::Data::new(Arc::new(KubeContexts { contexts }));
+    // --- 사전 접속 테스트 로직 추가 ---
+    info!("--- 클러스터 사전 접속 테스트 시작 ---");
+    let mut successfully_connected_contexts = HashMap::new();
+    for (context_name, client) in contexts.drain() { // contexts를 소유권 이전하며 순회
+        let nodes_api: Api<Node> = Api::all(client.clone());
+        let lp = ListParams::default().limit(1); // 가벼운 테스트를 위해 1개만 요청
+
+        match nodes_api.list(&lp).await {
+            Ok(_) => {
+                info!("✅ [Context: {}] Kubernetes API 서버에 성공적으로 접속했습니다.", context_name);
+                successfully_connected_contexts.insert(context_name, client); // 성공한 클라이언트만 다시 저장
+            },
+            Err(e) => {
+                error!("❌ [Context: {}] Kubernetes API 서버 접속 테스트 실패: {}", context_name, e);
+            }
+        }
+    }
+    info!("--- 클러스터 사전 접속 테스트 완료 ---");
+
+    // 성공적으로 접속된 클라이언트만 사용하여 KubeContexts 생성
+    let kube_contexts = web::Data::new(Arc::new(KubeContexts { contexts: successfully_connected_contexts }));
+
+    // 만약 접속 가능한 클러스터가 하나도 없다면 서버를 시작하지 않거나 경고
+    if kube_contexts.contexts.is_empty() {
+        error!("🚨 접속 가능한 Kubernetes 클러스터가 없습니다. 서버를 시작하지 않습니다.");
+        return Ok(()); // 서버 시작을 중단
+    }
 
     info!("\n🚀 서버 시작: http://127.0.0.1:8080");
 
@@ -221,9 +247,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(kube_contexts.clone())
-            // 기존 /api/clusters 대신 /ws/ 라우트 추가
             .route("/ws/", web::get().to(ws_route))
-            // 정적 파일 서빙을 위한 'static' 디렉토리 설정
             .service(fs::Files::new("/", "./static").index_file("index.html"))
     })
     .bind(("127.0.0.1", 8080))?
