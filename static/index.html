@@ -184,11 +184,17 @@
                             <p class="text-gray-400 text-sm">메모리 용량</p>
                             <p class="text-white text-lg font-medium">{{ selectedItem.data.capacity_memory }}</p>
                         </div>
-                        <!-- GPU 정보 섹션: v-if 조건 제거하여 항상 표시 -->
+                        <!-- GPU 정보 섹션: GPU 모델 표시 로직 개선 -->
                         <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
                             <p class="text-gray-400 text-sm">GPU 정보</p>
                             <p class="text-white text-lg font-medium">
-                                {{ selectedItem.data.gpu_model }} ({{ selectedItem.data.gpu_count }}개)
+                                <span v-if="selectedItem.data.gpu_model === 'N/A' && selectedItem.data.gpu_count !== '0'">
+                                    GPU (알 수 없음)
+                                </span>
+                                <span v-else>
+                                    {{ selectedItem.data.gpu_model }}
+                                </span>
+                                ({{ selectedItem.data.gpu_count }}개)
                             </p>
                         </div>
                         <div v-if="Object.keys(selectedItem.data.mig_devices).length > 0" class="bg-gray-700/50 p-5 rounded-lg border border-gray-600 col-span-full">
