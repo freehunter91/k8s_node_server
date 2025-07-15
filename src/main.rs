@@ -7,22 +7,32 @@ use kube::{
     config::{KubeConfigOptions, Kubeconfig},
     Api, Client, Config,
 };
-use log::{error, info, warn}; // warn 레벨 추가
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+// HashMap 대신 BTreeMap을 사용하도록 수정합니다.
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-// --- 데이터 모델 (변경 없음) ---
+// --- 데이터 모델 ---
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ContainerInfo { name: String, image: String }
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct PodInfo { name: String, namespace: String, node_name: String, labels: HashMap<String, String>, containers: Vec<ContainerInfo>, cluster_name: String }
 
-// --- 데이터 모델 (NodeInfo에 GPU 및 MIG 정보 필드 추가) ---
+// PodInfo의 labels 타입을 BTreeMap으로 수정
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct PodInfo {
+    name: String,
+    namespace: String,
+    node_name: String,
+    labels: BTreeMap<String, String>, // HashMap -> BTreeMap
+    containers: Vec<ContainerInfo>,
+    cluster_name: String,
+}
+
+// NodeInfo의 labels 타입을 BTreeMap으로 수정
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct NodeInfo {
     name: String,
-    labels: HashMap<String, String>,
+    labels: BTreeMap<String, String>, // HashMap -> BTreeMap
     pods: Vec<PodInfo>,
     pod_count: usize,
     container_count: usize,
@@ -32,16 +42,15 @@ struct NodeInfo {
     architecture: String,
     capacity_cpu: String,
     capacity_memory: String,
-    // --- 추가된 GPU/MIG 필드 ---
     gpu_model: String,
     gpu_count: String,
-    mig_devices: HashMap<String, String>, // MIG 프로파일과 개수를 저장
+    mig_devices: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ClusterInfo { name: String, nodes: Vec<NodeInfo>, node_count: usize, pod_count: usize }
 
-// --- API 핸들러 (오류 발생 시 다음 컨텍스트로 넘어가도록 수정) ---
+// --- API 핸들러 ---
 #[get("/clusters")]
 async fn get_all_clusters_info(
     kube_contexts: web::Data<Arc<KubeContexts>>,
@@ -53,7 +62,6 @@ async fn get_all_clusters_info(
         let pods_api: Api<Pod> = Api::all(client.clone());
         let lp = ListParams::default();
 
-        // 노드 정보 조회 실패 시 건너뛰기
         info!("... [Context: {}] 노드 목록을 요청합니다.", context_name);
         let nodes = match nodes_api.list(&lp).await {
             Ok(n) => {
@@ -66,7 +74,6 @@ async fn get_all_clusters_info(
             }
         };
 
-        // 파드 정보 조회 실패 시 건너뛰기
         info!("... [Context: {}] 파드 목록을 요청합니다.", context_name);
         let pods = match pods_api.list(&lp).await {
             Ok(p) => {
@@ -79,7 +86,6 @@ async fn get_all_clusters_info(
             }
         };
 
-        // 데이터 가공 로직
         let mut nodes_info = vec![];
         for node in nodes {
             let node_name = node.metadata.name.clone().unwrap_or_default();
@@ -93,7 +99,8 @@ async fn get_all_clusters_info(
                         name: p.metadata.name.clone().unwrap_or_default(),
                         namespace: p.metadata.namespace.clone().unwrap_or_default(),
                         node_name: node_name.clone(),
-                        labels: p.metadata.labels.clone().unwrap_or_default().into_iter().collect(),
+                        // .into_iter().collect() 변환 과정을 제거하고 직접 할당합니다.
+                        labels: p.metadata.labels.clone().unwrap_or_default(),
                         containers,
                         cluster_name: context_name.clone(),
                     }
@@ -104,7 +111,6 @@ async fn get_all_clusters_info(
             let node_info_details = node_status.and_then(|s| s.node_info.as_ref());
             let node_labels = node.metadata.labels.as_ref().unwrap_or(&Default::default());
 
-            // --- 로직 수정 부분: GPU 및 MIG 정보 추출 ---
             let gpu_model = node_labels.get("nvidia.com/gpu.product").cloned().unwrap_or_else(|| "N/A".to_string());
             let gpu_count = node_labels.get("nvidia.com/gpu.count").cloned().unwrap_or_else(|| "0".to_string());
 
@@ -112,16 +118,15 @@ async fn get_all_clusters_info(
             if let Some(capacity) = node_status.and_then(|s| s.capacity.as_ref()) {
                 for (key, value) in capacity {
                     if key.starts_with("nvidia.com/mig-") {
-                        // 키에서 'nvidia.com/mig-' 접두사를 제거하여 MIG 프로파일 이름만 추출합니다.
                         let mig_profile = key.strip_prefix("nvidia.com/mig-").unwrap_or(key);
                         mig_devices.insert(mig_profile.to_string(), value.0.clone());
                     }
                 }
             }
-            // --- GPU 및 MIG 정보 추출 끝 ---
 
             nodes_info.push(NodeInfo {
                 name: node_name.clone(),
+                // .clone()만으로 타입이 일치하므로 바로 할당합니다.
                 labels: node_labels.clone(),
                 pod_count: node_pods.len(),
                 container_count,
@@ -132,7 +137,6 @@ async fn get_all_clusters_info(
                 architecture: node_info_details.map_or("N/A".to_string(), |ni| ni.architecture.clone()),
                 capacity_cpu: node_status.and_then(|s| s.capacity.as_ref()).and_then(|c| c.get("cpu").map(|q| q.0.clone())).unwrap_or_else(|| "N/A".to_string()),
                 capacity_memory: node_status.and_then(|s| s.capacity.as_ref()).and_then(|c| c.get("memory").map(|q| q.0.clone())).unwrap_or_else(|| "N/A".to_string()),
-                // --- 추출한 GPU/MIG 정보를 구조체에 할당 ---
                 gpu_model,
                 gpu_count,
                 mig_devices,
@@ -155,15 +159,11 @@ struct KubeContexts {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // 로거 초기화. RUST_LOG 환경 변수로 로그 레벨을 제어합니다.
-    // (예: RUST_LOG=info cargo run)
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-
 
     info!("K8s 대시보드 백엔드 서버 초기화 중...");
 
     let mut contexts = HashMap::new();
-    // kubeconfig 파일을 읽어옵니다.
     match Kubeconfig::read() {
         Ok(config) => {
             info!("kubeconfig 파일을 성공적으로 읽었습니다. {}개의 컨텍스트 발견.", config.contexts.len());
@@ -172,10 +172,8 @@ async fn main() -> std::io::Result<()> {
                 info!("... '{}' 컨텍스트 설정 읽는 중...", context_name);
                 let options = KubeConfigOptions { context: Some(context_name.clone()), ..Default::default() };
                 
-                // 각 컨텍스트에 대한 설정을 비동기적으로 로드합니다.
                 match Config::from_custom_kubeconfig(config.clone(), &options).await {
                     Ok(config_for_context) => {
-                        // 설정으로부터 클라이언트를 생성합니다.
                         match Client::try_from(config_for_context) {
                             Ok(client) => {
                                 info!("✅ '{}' 클러스터 클라이언트 생성 성공", context_name);
@@ -197,19 +195,17 @@ async fn main() -> std::io::Result<()> {
         }
     }
 
-
     let kube_contexts = web::Data::new(Arc::new(KubeContexts { contexts }));
 
     info!("\n🚀 서버 시작: http://127.0.0.1:8080");
     info!("현재 {}개의 클러스터에 연결되었습니다.", kube_contexts.contexts.len());
-
 
     HttpServer::new(move || {
         let cors = Cors::default().allow_any_origin().allowed_methods(vec!["GET"]).allow_any_header().max_age(3600);
 
         App::new()
             .wrap(cors)
-            .app_data(kube_contexts.clone()) // app_data를 공유합니다.
+            .app_data(kube_contexts.clone())
             .service(
                 web::scope("/api")
                     .service(get_all_clusters_info),
