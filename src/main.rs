@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use log::{error, info, warn};
 
 // --- [수정] 데이터 모델: 프론트엔드에 필요한 모든 상세 정보를 포함하도록 복원 ---
-#[derive(Serialize, Deserialize, Clone, Debug, Message)]
+#[derive(Serialize, Deserialize, Clone, Debug, actix::Message)]
 #[rtype(result = "()")]
 pub struct ClusterInfo {
     pub name: String,
@@ -61,7 +61,7 @@ pub struct ContainerInfo {
 
 
 // --- 액터 메시지 정의 ---
-#[derive(Message)]
+#[derive(actix::Message)]
 #[rtype(result = "()")]
 struct FetchData(pub Addr<WsSession>);
 
@@ -80,7 +80,7 @@ impl Actor for WsSession {
     }
 }
 
-impl Handler<ClusterInfo> for WsSession {
+impl actix::Handler<ClusterInfo> for WsSession {
     type Result = ();
 
     fn handle(&mut self, msg: ClusterInfo, ctx: &mut Self::Context) {
@@ -92,10 +92,7 @@ impl Handler<ClusterInfo> for WsSession {
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
     fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         match msg {
-            Ok(ws::Message::Text(text)) => {
-                info!("클라이언트로부터 메시지 수신: {}", text);
-                ctx.text(format!("Echo: {}", text));
-            }
+            Ok(ws::Message::Text(text)) => info!("클라이언트로부터 메시지 수신: {}", text),
             Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
             Ok(ws::Message::Close(reason)) => ctx.close(reason),
             Err(e) => {
@@ -113,7 +110,7 @@ pub struct WsServer {
 }
 
 // [수정] FetchData 메시지를 받았을 때의 처리 로직
-impl Handler<FetchData> for WsServer {
+impl actix::Handler<FetchData> for WsServer {
     type Result = ();
 
     fn handle(&mut self, msg: FetchData, _ctx: &mut Self::Context) {
@@ -142,11 +139,9 @@ impl Handler<FetchData> for WsServer {
                             let node_pods: Vec<PodInfo> = pods.items.iter()
                                 .filter(|p| p.spec.as_ref().and_then(|s| s.node_name.as_ref()) == Some(&node_name))
                                 .map(|p| {
-                                    let containers: Vec<ContainerInfo> = p.spec.as_ref().map(|s| s.containers.iter().map(|c| {
-                                        ContainerInfo {
-                                            name: c.name.clone(),
-                                            image: c.image.clone().unwrap_or_default(),
-                                        }
+                                    let containers: Vec<ContainerInfo> = p.spec.as_ref().map(|s| s.containers.iter().map(|c| ContainerInfo {
+                                        name: c.name.clone(),
+                                        image: c.image.clone().unwrap_or_default(),
                                     }).collect()).unwrap_or_default();
                                     
                                     container_count_for_node += containers.len();
@@ -221,19 +216,10 @@ impl Actor for WsServer {
     type Context = Context<Self>;
 }
 
-// --- 웹소켓 연결 핸들러 ---
-async fn ws_index(
-    req: HttpRequest,
-    stream: web::Payload,
-    srv: web::Data<Addr<WsServer>>,
-) -> Result<HttpResponse, Error> {
-    let session = WsSession {
-        server_addr: srv.get_ref().clone(),
-    };
-    ws::start(session, &req, stream)
+async fn ws_index(req: HttpRequest, stream: web::Payload, srv: web::Data<Addr<WsServer>>) -> Result<HttpResponse, Error> {
+    ws::start(WsSession { server_addr: srv.get_ref().clone() }, &req, stream)
 }
 
-// --- 메인 함수 ---
 #[derive(Clone)]
 pub struct ClusterConfig {
     pub name: String,
@@ -245,17 +231,13 @@ pub struct ClusterConfig {
 async fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
-    // --- 실제 클러스터 정보 설정 ---
     let cluster_configs = match Kubeconfig::read() {
         Ok(kubeconfig) => {
             info!("Kubeconfig 파일을 성공적으로 읽었습니다.");
-            kubeconfig.contexts.iter().map(|ctx| {
-                ClusterConfig {
-                    name: ctx.name.clone(),
-                    kubeconfig: kubeconfig.clone(),
-                    // 중요: 각 컨텍스트에 맞는 ID 토큰을 제공해야 합니다.
-                    id_token: "여기에_ID_토큰을_붙여넣으세요".into(),
-                }
+            kubeconfig.contexts.iter().map(|ctx| ClusterConfig {
+                name: ctx.name.clone(),
+                kubeconfig: kubeconfig.clone(),
+                id_token: "여기에_ID_토큰을_붙여넣으세요".into(),
             }).collect()
         }
         Err(e) => {
@@ -268,7 +250,6 @@ async fn main() -> std::io::Result<()> {
         warn!("설정된 클러스터 정보가 없습니다.");
     }
 
-    // --- 클라이언트 생성 ---
     let user_clients = Arc::new(Mutex::new(HashMap::new()));
     for config in &cluster_configs {
         let name = config.name.clone();
@@ -296,7 +277,6 @@ async fn main() -> std::io::Result<()> {
         });
     }
 
-    // --- 서버 시작 ---
     let server = WsServer { user_clients };
     let server_addr = server.start();
 
@@ -308,8 +288,7 @@ async fn main() -> std::io::Result<()> {
             .route("/ws/", web::get().to(ws_index))
             .service(fs::Files::new("/", "./static").index_file("index.html"))
     })
-    .bind("0.0.0.0:8080")?
+    .bind("127.0.0.1:8080")?
     .run()
     .await
 }
-    

@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# 사용자가 요청한 버전을 유지합니다.
 kube = "1.1.0"
 k8s-openapi = { version = "0.25", features = ["v1_30"] }
+
 # actix와 관련된 라이브러리들의 버전을 통일합니다.
 actix = "0.13.5"
 actix-web = "4.8.0"
@@ -14,8 +16,10 @@ actix-files = "0.6.6"
 
 # 기타 필요한 라이브러리들
 serde = { version = "1.0", features = ["derive"] }
-# [추가] JSON 직렬화를 위해 serde_json을 추가합니다.
 serde_json = "1.0"
 log = "0.4"
 env_logger = "0.11"
 tokio = { version = "1", features = ["full"] }
+
+# kube = "1.1.0" 버전이 요구하는 secrecy 크레이트를 추가합니다.
+secrecy = { version = "0.8", features = ["serde"] }
