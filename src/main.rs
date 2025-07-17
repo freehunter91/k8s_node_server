@@ -1,5 +1,3 @@
-// main.rs
-
 use actix::{Actor, Addr, Context, Handler, Message, StreamHandler};
 use actix_files as fs;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
@@ -16,7 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use log::{error, info, warn};
 
-// 데이터 구조
+// 데이터 모델
 #[derive(Serialize, Deserialize, Clone, Debug, Message)]
 #[rtype(result = "()")]
 pub struct ClusterInfo {
@@ -60,7 +58,7 @@ pub struct ContainerInfo {
     pub image: String,
 }
 
-// 세션 메시지 정의
+// WebSocket 메시지 정의
 #[derive(Message)]
 #[rtype(result = "()")]
 struct Connect { pub addr: Addr<WsSession>, pub id: usize }
@@ -69,7 +67,6 @@ struct Connect { pub addr: Addr<WsSession>, pub id: usize }
 #[rtype(result = "()")]
 struct Disconnect { pub id: usize }
 
-// 웹소켓 세션
 pub struct WsSession {
     pub id: usize,
     pub server_addr: Addr<WsServer>,
@@ -94,9 +91,14 @@ impl Handler<ClusterInfo> for WsSession {
     type Result = ();
 
     fn handle(&mut self, msg: ClusterInfo, ctx: &mut Self::Context) {
-        if let Ok(text) = serde_json::to_string(&msg) {
-            info!("📤 클러스터 '{}' 데이터 전송 - 세션 ID: {}", msg.name, self.id);
-            ctx.text(text);
+        match serde_json::to_string(&msg) {
+            Ok(json) => {
+                info!("📤 클러스터 '{}' 데이터 전송 - 세션 ID: {}", msg.name, self.id);
+                ctx.text(json);
+            }
+            Err(e) => {
+                error!("JSON 직렬화 실패: {}", e);
+            }
         }
     }
 }
@@ -110,7 +112,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
     }
 }
 
-// WebSocket 서버
+// 중앙 WebSocket 서버
 pub struct WsServer {
     sessions: HashMap<usize, Addr<WsSession>>,
     user_clients: Arc<HashMap<String, Client>>,
@@ -168,7 +170,7 @@ impl Handler<Disconnect> for WsServer {
     }
 }
 
-// 클러스터 데이터 수집
+// 클러스터 정보 수집
 async fn fetch_cluster_data(name: String, client: Client) -> Option<ClusterInfo> {
     let nodes_api: kube::Api<Node> = kube::Api::all(client.clone());
     let pods_api: kube::Api<Pod> = kube::Api::all(client);
@@ -245,19 +247,25 @@ async fn fetch_cluster_data(name: String, client: Client) -> Option<ClusterInfo>
                 }
             }).collect();
 
-            Some(ClusterInfo { name, node_count: nodes_info.len(), pod_count: total_pod_count, nodes: nodes_info })
+            Some(ClusterInfo {
+                name,
+                node_count: nodes_info.len(),
+                pod_count: total_pod_count,
+                nodes: nodes_info,
+            })
         }
         _ => None,
     }
 }
 
-// WebSocket 엔드포인트
+// WebSocket 핸들러
 async fn ws_index(req: HttpRequest, stream: web::Payload, srv: web::Data<Addr<WsServer>>) -> Result<HttpResponse, Error> {
-    let id = thread_rng().gen();
+    let id: usize = thread_rng().gen();
     info!("🌐 WebSocket 연결 요청 수신 - 세션 ID: {}", id);
     ws::start(WsSession { id, server_addr: srv.get_ref().clone() }, &req, stream)
 }
 
+// 앱 시작점
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
