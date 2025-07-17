@@ -1,191 +1,188 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kubernetes 통합 대시보드</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; background-color: #111827; color: #E5E7EB; }
-        @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #1f2937; }
-        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 10px; }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Kubernetes 통합 대시보드</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #111827;
+      color: #E5E7EB;
+    }
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in {
+      animation: fade-in 0.2s ease-out;
+    }
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #1f2937;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #4b5563;
+      border-radius: 10px;
+    }
+  </style>
 </head>
 <body>
-
 <div id="app" class="container mx-auto px-4 py-8 min-h-screen">
-    <!-- 헤더 및 로딩/오류 메시지 (변경 없음) -->
-    <header class="mb-8 p-4 bg-gray-800/30 rounded-xl shadow-lg border border-gray-700">
-        <h1 class="text-4xl sm:text-5xl font-extrabold text-center text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-2">
-            Kubernetes 통합 대시보드
-        </h1>
-        <p class="text-center text-gray-400 text-lg">Rust & Vue.js 기반 실시간 클러스터 모니터링</p>
-    </header>
+  <header class="mb-8 p-4 bg-gray-800/30 rounded-xl shadow-lg border border-gray-700">
+    <h1 class="text-4xl sm:text-5xl font-extrabold text-center text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-2">
+      Kubernetes 통합 대시보드
+    </h1>
+    <p class="text-center text-gray-400 text-lg">Rust & Vue.js 기반 실시간 클러스터 모니터링</p>
+  </header>
 
-    <div v-if="connecting" class="text-center py-20">
-        <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500 mx-auto mb-4"></div>
-        <p class="text-2xl text-gray-400">서버에 연결하는 중...</p>
-    </div>
-    <div v-else-if="error" class="bg-red-900/50 border border-red-700 text-red-300 px-6 py-4 rounded-lg mb-8 shadow-md">
-        <p><span class="font-bold">오류:</span> {{ error }}</p>
-    </div>
-    <div v-if="!connecting && allClusters.length === 0 && !error" class="text-center py-20">
-        <p class="text-2xl text-gray-400">클러스터 정보를 수신 대기 중입니다...</p>
-    </div>
+  <div v-if="connecting" class="text-center py-20">
+    <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500 mx-auto mb-4"></div>
+    <p class="text-2xl text-gray-400">{{ reconnecting ? '서버와 연결이 끊어졌습니다. 5초 후 재연결합니다...' : '서버에 연결하는 중...' }}</p>
+  </div>
 
-    <main v-if="allClusters.length > 0 && !connecting && !error" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <!-- 왼쪽 패널: 클러스터 목록 및 검색 (변경 없음) -->
-        <aside class="lg:col-span-1 bg-gray-800/50 p-6 rounded-xl border border-gray-700 self-start lg:sticky lg:top-8 shadow-lg h-full max-h-[calc(100vh-120px)] flex flex-col">
-            <!-- ... -->
-        </aside>
+  <div v-else-if="error" class="bg-red-900/50 border border-red-700 text-red-300 px-6 py-4 rounded-lg mb-8 shadow-md">
+    <p><span class="font-bold">오류:</span> {{ error }}</p>
+  </div>
 
-        <!-- 오른쪽 패널: 상세 정보 뷰 -->
-        <section class="lg:col-span-2 bg-gray-800/50 p-6 rounded-xl border border-gray-700 shadow-lg relative">
-            <!-- 뒤로가기 버튼 및 초기 화면 (변경 없음) -->
-            <button v-if="selectedItem" @click="goBackToMain" class="absolute top-4 right-4 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200 z-10">
-                ← 뒤로 가기
-            </button>
-            <div v-if="!selectedItem" class="text-center py-20">
-                <p class="text-2xl text-gray-400">왼쪽에서 항목을 선택해주세요.</p>
+  <div v-if="!connecting && allClusters.length === 0 && !error" class="text-center py-20">
+    <p class="text-2xl text-gray-400">연결된 클러스터가 없거나 정보를 수신 대기 중입니다.</p>
+    <p class="text-md text-gray-500 mt-2">kubeconfig 설정을 확인하거나 백엔드 서버가 실행 중인지 확인해주세요.</p>
+  </div>
+
+  <main v-if="allClusters.length > 0 && !connecting && !error" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+    <aside class="lg:col-span-1 bg-gray-800/50 p-6 rounded-xl border border-gray-700 self-start lg:sticky lg:top-8 shadow-lg h-full max-h-[calc(100vh-120px)] flex flex-col">
+      <h2 class="text-2xl font-semibold text-white mb-4">클러스터 목록 ({{ allClusters.length }})</h2>
+      <div class="flex-grow overflow-y-auto pr-2 -mr-2">
+        <ul class="space-y-3">
+          <li v-for="cluster in allClusters" :key="cluster.name"
+              @click="selectItem(cluster, 'cluster')"
+              :class="{'bg-blue-600/30 border-blue-500': selectedItem?.data?.name === cluster.name}"
+              class="p-4 rounded-lg border border-gray-700 cursor-pointer transition-colors duration-200 animate-fade-in hover:bg-gray-700/50">
+            <div class="flex justify-between items-center">
+              <div>
+                <p class="font-semibold text-white text-lg">{{ cluster.name }}</p>
+                <p class="text-sm text-gray-400">{{ cluster.node_count }} 노드, {{ cluster.pod_count }} 파드</p>
+              </div>
+              <span class="text-blue-400 text-2xl">🌐</span>
             </div>
+          </li>
+        </ul>
+      </div>
+    </aside>
 
-            <!-- 클러스터 상세 정보 (변경 없음) -->
-            <div v-if="selectedItem && selectedItem.type === 'cluster'" class="animate-fade-in">
-                <!-- ... -->
-            </div>
-
-            <!-- [수정] 노드 상세 정보 -->
-            <div v-else-if="selectedItem && selectedItem.type === 'node'" class="animate-fade-in">
-                <h2 class="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-teal-600 mb-6">
-                    🖥️ 노드: {{ selectedItem.data.name }}
-                </h2>
-                <p class="text-gray-400 mb-4">클러스터: <span class="font-medium text-blue-400">{{ selectedItem.data.cluster_name }}</span></p>
-
-                <!-- [추가] 실시간 리소스 사용률 표시 -->
-                <div class="mb-8 p-5 rounded-lg border border-gray-600 bg-gray-700/50">
-                    <h3 class="text-xl font-semibold text-white mb-4">실시간 리소스 사용률</h3>
-                    <!-- CPU 사용률 -->
-                    <div class="mb-4">
-                        <div class="flex justify-between items-center mb-1">
-                            <span class="text-base font-medium text-blue-300">CPU</span>
-                            <span class="text-sm font-medium text-blue-300">{{ selectedItem.data.cpu_usage_percent.toFixed(2) }}% ({{ selectedItem.data.cpu_usage }})</span>
-                        </div>
-                        <div class="w-full bg-gray-600 rounded-full h-4">
-                            <div class="bg-blue-500 h-4 rounded-full" :style="{ width: selectedItem.data.cpu_usage_percent + '%' }"></div>
-                        </div>
-                    </div>
-                    <!-- 메모리 사용률 -->
-                    <div>
-                        <div class="flex justify-between items-center mb-1">
-                            <span class="text-base font-medium text-purple-300">Memory</span>
-                            <span class="text-sm font-medium text-purple-300">{{ selectedItem.data.memory_usage_percent.toFixed(2) }}% ({{ selectedItem.data.memory_usage }})</span>
-                        </div>
-                        <div class="w-full bg-gray-600 rounded-full h-4">
-                            <div class="bg-purple-500 h-4 rounded-full" :style="{ width: selectedItem.data.memory_usage_percent + '%' }"></div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- 기존 노드 상세 정보 (GPU 제외) -->
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                    <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
-                        <p class="text-gray-400 text-sm">OS 이미지</p>
-                        <p class="text-white text-lg font-medium">{{ selectedItem.data.os_image }}</p>
-                    </div>
-                    <!-- ... 기타 정보들 ... -->
-                </div>
-
-                <!-- 파드 목록 및 라벨 (변경 없음) -->
-                <!-- ... -->
-            </div>
-
-            <!-- 파드 상세 정보 (변경 없음) -->
-            <div v-else-if="selectedItem && selectedItem.type === 'pod'" class="animate-fade-in">
-                <!-- ... -->
-            </div>
-        </section>
-    </main>
+    <section class="lg:col-span-2 bg-gray-800/50 p-6 rounded-xl border border-gray-700 shadow-lg relative">
+      <button v-if="selectedItem" @click="goBackToMain"
+              class="absolute top-4 right-4 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200 z-10">
+        ← 뒤로 가기
+      </button>
+      <div v-if="!selectedItem" class="text-center py-20">
+        <p class="text-2xl text-gray-400">왼쪽에서 클러스터를 선택하여 노드 목록을 확인하세요.</p>
+      </div>
+      <div v-else class="animate-fade-in">
+        <h2 class="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-600 mb-6">
+          🌐 클러스터: {{ selectedItem.data.name }}
+        </h2>
+        <h3 class="text-2xl font-semibold text-white mb-4">노드 목록 ({{ selectedItem.data.nodes.length }})</h3>
+        <div class="space-y-4 max-h-[calc(100vh-220px)] overflow-y-auto pr-2 -mr-2">
+          <div v-for="node in selectedItem.data.nodes" :key="node.name"
+               class="p-4 rounded-lg border border-gray-700 transition-colors duration-200 animate-fade-in">
+            <p class="font-semibold text-white text-lg">{{ node.name }}</p>
+            <p class="text-sm text-gray-400">{{ node.pod_count }} 파드, {{ node.container_count }} 컨테이너</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
 </div>
 
 <script>
-    // Vue 앱 로직 (변경 없음)
-    const { createApp, ref, onMounted, onUnmounted, computed, watch } = Vue;
+const { createApp, ref, onMounted, onUnmounted } = Vue;
 
-    createApp({
-        setup() {
-            const allClusters = ref([]);
-            const connecting = ref(true);
-            const error = ref(null);
-            const searchTerm = ref('');
-            const selectedItem = ref(null);
+createApp({
+  setup() {
+    const allClusters = ref([]);
+    const connecting = ref(true);
+    const reconnecting = ref(false);
+    const error = ref(null);
+    const selectedItem = ref(null);
+    let socket = null;
 
-            const connectWebSocket = () => {
-                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${wsProtocol}//${window.location.host}/ws/`;
-                const socket = new WebSocket(wsUrl);
+    const connectWebSocket = () => {
+      if (socket && socket.readyState <= 1) return;
 
-                socket.onopen = () => {
-                    console.log("WebSocket 연결 성공!");
-                    connecting.value = false;
-                    error.value = null;
-                };
+      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(`${wsProtocol}//${location.host}/ws/`);
 
-                socket.onmessage = (event) => {
-                    try {
-                        const newClusterData = JSON.parse(event.data);
-                        const index = allClusters.value.findIndex(c => c.name === newClusterData.name);
-                        if (index !== -1) {
-                            allClusters.value[index] = newClusterData;
-                        } else {
-                            allClusters.value.push(newClusterData);
-                        }
-                        // [수정] 선택된 항목이 있을 경우, 실시간으로 데이터를 업데이트합니다.
-                        if (selectedItem.value) {
-                            const currentCluster = allClusters.value.find(c => c.name === selectedItem.value.data.cluster_name);
-                            if (currentCluster) {
-                                if (selectedItem.value.type === 'cluster') {
-                                    selectedItem.value.data = currentCluster;
-                                } else if (selectedItem.value.type === 'node') {
-                                    const updatedNode = currentCluster.nodes.find(n => n.name === selectedItem.value.data.name);
-                                    if (updatedNode) selectedItem.value.data = updatedNode;
-                                } else if (selectedItem.value.type === 'pod') {
-                                    // 파드 정보도 필요 시 업데이트
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        console.error("수신된 데이터 처리 오류:", e);
-                    }
-                };
+      socket.onopen = () => {
+        console.log("✅ WebSocket 연결 성공");
+        connecting.value = false;
+        reconnecting.value = false;
+        error.value = null;
+      };
 
-                socket.onerror = (event) => {
-                    error.value = "서버와 실시간 연결에 실패했습니다.";
-                    connecting.value = false;
-                };
+      socket.onmessage = ({ data }) => {
+        try {
+          const newClusterData = JSON.parse(data);
+          const idx = allClusters.value.findIndex(c => c.name === newClusterData.name);
+          if (idx !== -1) {
+            Object.assign(allClusters.value[idx], newClusterData);
+          } else {
+            allClusters.value.push(newClusterData);
+          }
 
-                socket.onclose = () => {
-                    connecting.value = true;
-                    setTimeout(connectWebSocket, 5000);
-                };
-            };
-            
-            // 나머지 Vue 로직 (goBackToMain, selectCluster 등)은 변경 없습니다.
-            const goBackToMain = () => selectedItem.value = null;
-            const handleEscKey = (event) => { if (event.key === 'Escape') goBackToMain(); };
-            onMounted(() => { connectWebSocket(); window.addEventListener('keydown', handleEscKey); });
-            onUnmounted(() => { window.removeEventListener('keydown', handleEscKey); });
-            const selectCluster = (cluster) => { selectedItem.value = { type: 'cluster', data: cluster }; };
-            const selectNode = (node) => { selectedItem.value = { type: 'node', data: node }; };
-            const selectPod = (pod) => { selectedItem.value = { type: 'pod', data: pod }; };
-
-            return { allClusters, connecting, error, searchTerm, selectedItem, goBackToMain, selectCluster, selectNode, selectPod };
+          if (selectedItem.value?.data.name === newClusterData.name) {
+            Object.assign(selectedItem.value.data, newClusterData);
+          }
+        } catch (e) {
+          console.error("📛 JSON 파싱 오류:", e);
         }
-    }).mount('#app');
+      };
+
+      socket.onerror = () => {
+        error.value = "❌ 서버와 실시간 연결에 실패했습니다.";
+        connecting.value = false;
+      };
+
+      socket.onclose = () => {
+        console.warn("🚫 WebSocket 종료됨. 재연결 시도 중...");
+        connecting.value = true;
+        reconnecting.value = true;
+        setTimeout(connectWebSocket, 5000);
+      };
+    };
+
+    const goBackToMain = () => selectedItem.value = null;
+    const handleEscKey = (event) => { if (event.key === 'Escape') goBackToMain(); };
+
+    onMounted(() => {
+      connectWebSocket();
+      window.addEventListener('keydown', handleEscKey);
+    });
+
+    onUnmounted(() => {
+      window.removeEventListener('keydown', handleEscKey);
+    });
+
+    const selectItem = (item, type) => {
+      selectedItem.value = { type, data: item };
+    };
+
+    return {
+      allClusters,
+      connecting,
+      reconnecting,
+      error,
+      selectedItem,
+      goBackToMain,
+      selectItem
+    };
+  }
+}).mount('#app');
 </script>
 </body>
 </html>
