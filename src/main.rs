@@ -38,6 +38,9 @@ pub struct NodeInfo {
     pub architecture: String,
     pub capacity_cpu: String,
     pub capacity_memory: String,
+    pub gpu_model: String,
+    pub gpu_count: String,
+    pub mig_devices: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -59,15 +62,11 @@ pub struct ContainerInfo {
 // --- 액터 메시지 정의 ---
 #[derive(Message)]
 #[rtype(result = "()")]
-struct Connect { 
-    pub addr: Addr<WsSession> 
-}
+struct Connect { pub addr: Addr<WsSession> }
 
 #[derive(Message)]
 #[rtype(result = "()")]
-struct Disconnect { 
-    pub addr: Addr<WsSession> 
-}
+struct Disconnect { pub addr: Addr<WsSession> }
 
 // --- 웹소켓 세션 액터 ---
 pub struct WsSession {
@@ -76,12 +75,10 @@ pub struct WsSession {
 
 impl Actor for WsSession {
     type Context = ws::WebsocketContext<Self>;
-
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("새로운 웹소켓 세션 시작됨.");
         self.server_addr.do_send(Connect { addr: ctx.address() });
     }
-
     fn stopping(&mut self, ctx: &mut Self::Context) -> actix::Running {
         self.server_addr.do_send(Disconnect { addr: ctx.address() });
         actix::Running::Stop
@@ -100,29 +97,10 @@ impl Handler<ClusterInfo> for WsSession {
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
     fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         match msg {
-            Ok(ws::Message::Ping(msg)) => {
-                ctx.pong(&msg);
-            }
-            Ok(ws::Message::Pong(_)) => {
-                // 하트비트 응답
-            }
-            Ok(ws::Message::Text(_)) => {
-                // 클라이언트에서 텍스트 메시지를 보낸 경우
-            }
-            Ok(ws::Message::Binary(_)) => {
-                // 바이너리 메시지 처리
-            }
-            Ok(ws::Message::Close(reason)) => {
-                ctx.close(reason);
-                ctx.stop();
-            }
-            Err(e) => {
-                error!("웹소켓 오류 발생: {}", e);
-                ctx.stop();
-            }
-            _ => {
-                ctx.stop();
-            }
+            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
+            Ok(ws::Message::Close(reason)) => { ctx.close(reason); ctx.stop(); },
+            Err(e) => { error!("웹소켓 오류 발생: {}", e); ctx.stop(); },
+            _ => {}
         }
     }
 }
@@ -135,31 +113,28 @@ pub struct WsServer {
 
 impl WsServer {
     pub fn new(clients: HashMap<String, Client>) -> Self {
-        Self {
-            sessions: Vec::new(),
-            user_clients: Arc::new(clients),
-        }
+        Self { sessions: Vec::new(), user_clients: Arc::new(clients) }
     }
 }
 
 impl Actor for WsServer {
     type Context = Context<Self>;
-
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("중앙 관리 서버 시작. 5초마다 데이터 폴링을 시작합니다.");
         ctx.run_interval(std::time::Duration::from_secs(5), |act, _ctx| {
             let clients = act.user_clients.clone();
             let sessions = act.sessions.clone();
-
-            actix::spawn(async move {
-                for (name, client) in clients.iter() {
-                    if let Some(info) = fetch_cluster_data(name.clone(), client.clone()).await {
-                        for session_addr in &sessions {
-                            session_addr.do_send(info.clone());
+            if !sessions.is_empty() {
+                tokio::spawn(async move {
+                    for (name, client) in clients.iter() {
+                        if let Some(info) = fetch_cluster_data(name.clone(), client.clone()).await {
+                            for session_addr in &sessions {
+                                session_addr.do_send(info.clone());
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
         });
     }
 }
@@ -185,101 +160,68 @@ async fn fetch_cluster_data(name: String, client: Client) -> Option<ClusterInfo>
     let nodes_api: kube::Api<Node> = kube::Api::all(client.clone());
     let pods_api: kube::Api<Pod> = kube::Api::all(client);
 
+    let lp = ListParams::default();
     let (nodes_res, pods_res) = tokio::join!(
-        nodes_api.list(&ListParams::default()),
-        pods_api.list(&ListParams::default())
+        nodes_api.list(&lp),
+        pods_api.list(&lp)
     );
 
     match (nodes_res, pods_res) {
         (Ok(nodes), Ok(pods)) => {
             let mut pods_by_node: HashMap<String, Vec<Pod>> = HashMap::new();
-            
             for pod in pods.items {
-                if let Some(node_name) = pod.spec.as_ref().and_then(|s| s.node_name.clone()) {
-                    pods_by_node.entry(node_name).or_default().push(pod);
+                if let Some(node_name) = &pod.spec.as_ref().and_then(|s| s.node_name.clone()) {
+                    pods_by_node.entry(node_name.clone()).or_default().push(pod);
                 }
             }
-            
             let total_pod_count = pods_by_node.values().map(|v| v.len()).sum();
-            
             let nodes_info: Vec<NodeInfo> = nodes.items.iter().map(|node| {
                 let node_name = node.name_any();
                 let node_pods_vec = pods_by_node.get(&node_name).cloned().unwrap_or_default();
                 let mut container_count_for_node = 0;
-                
                 let node_pods_info: Vec<PodInfo> = node_pods_vec.iter().map(|p| {
-                    let containers: Vec<ContainerInfo> = p.spec.as_ref()
-                        .map(|s| s.containers.iter().map(|c| ContainerInfo {
-                            name: c.name.clone(),
-                            image: c.image.clone().unwrap_or_default(),
-                        }).collect())
-                        .unwrap_or_default();
-                    
+                    let containers: Vec<ContainerInfo> = p.spec.as_ref().map(|s| s.containers.iter().map(|c| ContainerInfo {
+                        name: c.name.clone(), image: c.image.clone().unwrap_or_default(),
+                    }).collect()).unwrap_or_default();
                     container_count_for_node += containers.len();
-                    
-                    PodInfo { 
-                        name: p.name_any(), 
-                        namespace: p.namespace().unwrap_or_default(), 
-                        node_name: node_name.clone(), 
-                        labels: p.labels().clone(), 
-                        containers, 
-                        cluster_name: name.clone() 
-                    }
+                    PodInfo { name: p.name_any(), namespace: p.namespace().unwrap_or_default(), node_name: node_name.clone(), labels: p.labels().clone(), containers, cluster_name: name.clone() }
                 }).collect();
                 
                 let node_status = node.status.as_ref();
                 let node_info_details = node_status.and_then(|s| s.node_info.as_ref());
+                let node_labels = node.labels().clone();
+
+                let gpu_model = node_labels.get("nvidia.com/gpu.product").cloned().unwrap_or_else(|| "N/A".to_string());
+                let gpu_count = node_status.and_then(|s| s.capacity.as_ref()).and_then(|c| c.get("nvidia.com/gpu").map(|q| q.0.clone())).unwrap_or_else(|| "0".to_string());
+                let mut mig_devices = HashMap::new();
+                if let Some(capacity) = node_status.and_then(|s| s.capacity.as_ref()) {
+                    for (key, value) in capacity {
+                        if key.starts_with("nvidia.com/mig-") {
+                            let mig_profile = key.strip_prefix("nvidia.com/mig-").unwrap_or(key);
+                            mig_devices.insert(mig_profile.to_string(), value.0.clone());
+                        }
+                    }
+                }
                 
                 NodeInfo {
-                    name: node_name,
-                    labels: node.labels().clone(),
-                    pods: node_pods_info,
-                    pod_count: node_pods_vec.len(),
-                    container_count: container_count_for_node,
-                    cluster_name: name.clone(),
-                    os_image: node_info_details
-                        .map_or_else(|| "N/A".to_string(), |ni| ni.os_image.clone()),
-                    kubelet_version: node_info_details
-                        .map_or_else(|| "N/A".to_string(), |ni| ni.kubelet_version.clone()),
-                    architecture: node_info_details
-                        .map_or_else(|| "N/A".to_string(), |ni| ni.architecture.clone()),
-                    capacity_cpu: node_status
-                        .and_then(|s| s.capacity.as_ref())
-                        .and_then(|c| c.get("cpu"))
-                        .map(|q| q.0.clone())
-                        .unwrap_or_else(|| "N/A".to_string()),
-                    capacity_memory: node_status
-                        .and_then(|s| s.capacity.as_ref())
-                        .and_then(|c| c.get("memory"))
-                        .map(|q| q.0.clone())
-                        .unwrap_or_else(|| "N/A".to_string()),
+                    name: node_name, labels: node.labels().clone(), pods: node_pods_info, pod_count: node_pods_vec.len(), container_count: container_count_for_node, cluster_name: name.clone(),
+                    os_image: node_info_details.map_or_else(|| "N/A".to_string(), |ni| ni.os_image.clone()),
+                    kubelet_version: node_info_details.map_or_else(|| "N/A".to_string(), |ni| ni.kubelet_version.clone()),
+                    architecture: node_info_details.map_or_else(|| "N/A".to_string(), |ni| ni.architecture.clone()),
+                    capacity_cpu: node_status.and_then(|s| s.capacity.as_ref()).and_then(|c| c.get("cpu").map(|q| q.0.clone())).unwrap_or_else(|| "N/A".to_string()),
+                    capacity_memory: node_status.and_then(|s| s.capacity.as_ref()).and_then(|c| c.get("memory").map(|q| q.0.clone())).unwrap_or_else(|| "N/A".to_string()),
+                    gpu_model, gpu_count, mig_devices,
                 }
             }).collect();
-            
-            Some(ClusterInfo { 
-                name, 
-                node_count: nodes.items.len(), 
-                pod_count: total_pod_count, 
-                nodes: nodes_info 
-            })
+            Some(ClusterInfo { name: name.clone(), node_count: nodes.items.len(), pod_count: total_pod_count, nodes: nodes_info })
         }
-        (Err(e), _) => {
-            error!("[{}] 노드 조회 실패: {}", name, e);
-            None
-        }
-        (_, Err(e)) => {
-            error!("[{}] 파드 조회 실패: {}", name, e);
-            None
-        }
+        (Err(e), _) => { error!("[{}] 노드 조회 실패: {}", name, e); None },
+        (_, Err(e)) => { error!("[{}] 파드 조회 실패: {}", name, e); None },
     }
 }
 
 // --- 웹소켓 연결 핸들러 ---
-async fn ws_index(
-    req: HttpRequest,
-    stream: web::Payload,
-    srv: web::Data<Addr<WsServer>>,
-) -> Result<HttpResponse, Error> {
+async fn ws_index(req: HttpRequest, stream: web::Payload, srv: web::Data<Addr<WsServer>>) -> Result<HttpResponse, Error> {
     ws::start(WsSession { server_addr: srv.get_ref().clone() }, &req, stream)
 }
 
@@ -290,67 +232,39 @@ async fn main() -> std::io::Result<()> {
 
     let kubeconfig = match Kubeconfig::read() {
         Ok(conf) => conf,
-        Err(e) => {
-            error!("Kubeconfig 파일을 읽는 데 실패했습니다: {}. 서버를 시작할 수 없습니다.", e);
-            return Ok(());
-        }
+        Err(e) => { error!("Kubeconfig 파일을 읽는 데 실패했습니다: {}. 서버를 시작할 수 없습니다.", e); return Ok(()); }
     };
 
-    // 모든 클라이언트 생성을 비동기적으로 동시에 기다린 후 서버를 시작합니다.
     let mut client_creation_futures = vec![];
-    
     for context in &kubeconfig.contexts {
         let context_name = context.name.clone();
         let kubeconfig_clone = kubeconfig.clone();
-        
         client_creation_futures.push(tokio::spawn(async move {
             info!("[{}] 클라이언트 생성을 시도합니다...", context_name);
-            let options = KubeConfigOptions { 
-                context: Some(context_name.clone()), 
-                ..Default::default() 
+            let options = KubeConfigOptions { context: Some(context_name.clone()), ..Default::default() };
+            let config_result = Config::from_custom_kubeconfig(kubeconfig_clone, &options).await;
+            let mut client_config = match config_result {
+                Ok(c) => c,
+                Err(e) => { error!("[{}] 설정 로드 실패: {}", context_name, e); return None; }
             };
-            
-            match Config::from_custom_kubeconfig(kubeconfig_clone, &options).await {
-                Ok(mut client_config) => {
-                    // 토큰 설정 - 실제 사용 시 여기에 유효한 토큰을 설정하세요
-                    client_config.auth_info.token = Some("여기에_ID_토큰을_붙여넣으세요".into());
-                    client_config.auth_info.exec = None;
-
-                    match Client::try_from(client_config) {
-                        Ok(client) => {
-                            info!("[{}] 클라이언트 생성 성공", context_name);
-                            Ok((context_name, client))
-                        }
-                        Err(e) => {
-                            error!("[{}] 클라이언트 생성 실패: {}", context_name, e);
-                            Err(e)
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("[{}] 설정 로드 실패: {}", context_name, e);
-                    Err(e)
-                }
+            client_config.auth_info.token = Some("여기에_ID_토큰을_붙여넣으세요".into());
+            client_config.auth_info.exec = None;
+            match Client::try_from(client_config) {
+                Ok(client) => { info!("[{}] 클라이언트 생성 성공", context_name); Some((context_name, client)) }
+                Err(e) => { error!("[{}] 클라이언트 생성 실패: {}", context_name, e); None }
             }
         }));
     }
 
     let results = join_all(client_creation_futures).await;
     let mut user_clients = HashMap::new();
-    
     for result in results {
-        match result {
-            Ok(Ok((name, client))) => {
-                user_clients.insert(name, client);
-            }
-            Ok(Err(e)) => error!("클라이언트 생성 실패: {}", e),
-            Err(e) => error!("클라이언트 생성 작업 실패: {}", e),
+        if let Ok(Some((name, client))) = result {
+            user_clients.insert(name, client);
         }
     }
 
-    if user_clients.is_empty() {
-        warn!("성공적으로 생성된 클라이언트가 없습니다.");
-    }
+    if user_clients.is_empty() { warn!("성공적으로 생성된 클라이언트가 없습니다."); }
     
     let server = WsServer::new(user_clients);
     let server_addr = server.start();
