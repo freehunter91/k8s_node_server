@@ -1,6 +1,6 @@
 use actix::{Actor, Addr, Context, Handler, Message, StreamHandler, ActorContext, AsyncContext};
 use actix_files as fs;
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer, Result};
 use actix_web_actors::ws;
 use futures::future::join_all;
 use k8s_openapi::api::core::v1::{Node, Pod};
@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use log::{error, info, warn};
 use chrono;
+use std::time::Duration;
 
 // --- 데이터 모델 ---
 #[derive(Serialize, Deserialize, Clone, Debug, Message)]
@@ -59,7 +60,7 @@ pub struct ContainerInfo {
 
 // --- 웹소켓 세션 액터 ---
 pub struct WsSession {
-    pub user_clients: web::Data<Arc<Mutex<HashMap<String, Client>>>>,
+    pub user_clients: Arc<Mutex<HashMap<String, Client>>>,
 }
 
 impl Actor for WsSession {
@@ -67,15 +68,15 @@ impl Actor for WsSession {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("새로운 웹소켓 세션 시작됨. 5초마다 데이터 조회를 시작합니다.");
-        let clients_arc = self.user_clients.get_ref().clone();
+        let clients_arc = self.user_clients.clone();
         let addr = ctx.address();
 
         // 5초마다 주기적으로 모든 클러스터의 데이터를 조회
-        ctx.run_interval(std::time::Duration::from_secs(5), move |_act, _ctx| {
+        ctx.run_interval(Duration::from_secs(5), move |_act, _ctx| {
             let clients_clone = clients_arc.clone();
             let addr_clone = addr.clone();
             
-            tokio::spawn(async move {
+            actix::spawn(async move {
                 let locked_clients = match clients_clone.lock() {
                     Ok(clients) => clients,
                     Err(poisoned) => {
@@ -100,7 +101,9 @@ impl Actor for WsSession {
                 for result in results {
                     match result {
                         Ok(Some(info)) => {
-                            addr_clone.do_send(info);
+                            if let Err(e) = addr_clone.try_send(info) {
+                                error!("메시지 전송 실패: {}", e);
+                            }
                         }
                         Ok(None) => {
                             // 데이터 조회 실패 (이미 로그됨)
@@ -257,7 +260,11 @@ async fn ws_index(
     stream: web::Payload,
     clients: web::Data<Arc<Mutex<HashMap<String, Client>>>>,
 ) -> Result<HttpResponse, Error> {
-    ws::start(WsSession { user_clients: clients }, &req, stream)
+    let clients_arc = clients.get_ref().clone();
+    let session = WsSession { 
+        user_clients: clients_arc 
+    };
+    ws::start(session, &req, stream)
 }
 
 // --- 헬스 체크 엔드포인트 ---
