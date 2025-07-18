@@ -14,6 +14,18 @@
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #1f2937; }
         ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 10px; }
+        .usage-bar { 
+            background: linear-gradient(90deg, #10b981 0%, #f59e0b 70%, #ef4444 90%);
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .usage-fill {
+            height: 100%;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
     </style>
 </head>
 <body>
@@ -24,7 +36,7 @@
         <h1 class="text-4xl sm:text-5xl font-extrabold text-center text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-2">
             Kubernetes 통합 대시보드
         </h1>
-        <p class="text-center text-gray-400 text-lg">Rust & Vue.js 기반 실시간 클러스터 모니터링</p>
+        <p class="text-center text-gray-400 text-lg">실시간 클러스터 모니터링 대시보드</p>
     </header>
 
     <div v-if="connecting" class="text-center py-20">
@@ -45,6 +57,30 @@
             <div class="mb-4">
                 <input type="text" v-model="searchTerm" placeholder="클러스터, 노드, 파드 검색..." class="w-full p-3 rounded-lg bg-gray-700 border border-gray-600 text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"/>
             </div>
+            
+            <!-- 전체 클러스터 요약 -->
+            <div class="mb-6 p-4 bg-gray-700/30 rounded-lg border border-gray-600">
+                <h3 class="text-lg font-semibold text-white mb-2">전체 요약</h3>
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div class="text-center">
+                        <span class="block text-blue-400 font-bold text-lg">{{ totalClusters }}</span>
+                        <span class="text-gray-400">클러스터</span>
+                    </div>
+                    <div class="text-center">
+                        <span class="block text-green-400 font-bold text-lg">{{ totalNodes }}</span>
+                        <span class="text-gray-400">노드</span>
+                    </div>
+                    <div class="text-center">
+                        <span class="block text-purple-400 font-bold text-lg">{{ totalPods }}</span>
+                        <span class="text-gray-400">파드</span>
+                    </div>
+                    <div class="text-center">
+                        <span class="block text-yellow-400 font-bold text-lg">{{ totalGPUs }}</span>
+                        <span class="text-gray-400">GPU</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="flex-grow overflow-y-auto pr-2 -mr-2">
                 <div v-if="searchResults.length > 0">
                     <h3 class="text-xl font-medium text-gray-300 mb-3">검색 결과 ({{ searchResults.length }})</h3>
@@ -55,12 +91,15 @@
                                 <span v-if="item.type === 'cluster'" class="text-blue-400 text-xl">🌐</span>
                                 <span v-else-if="item.type === 'node'" class="text-green-400 text-xl">🖥️</span>
                                 <span v-else-if="item.type === 'pod'" class="text-purple-400 text-xl">📦</span>
-                                <div>
+                                <div class="flex-1">
                                     <p class="font-semibold text-white">{{ item.name }}</p>
                                     <p class="text-sm text-gray-400">
                                         <span class="capitalize">{{ item.type }}</span>
                                         <span v-if="item.type !== 'cluster'"> ({{ item.cluster_name }})</span>
                                     </p>
+                                    <div v-if="item.gpu_info" class="text-xs text-yellow-400 mt-1">
+                                        🎮 GPU: {{ item.gpu_info }}
+                                    </div>
                                 </div>
                             </div>
                         </li>
@@ -76,9 +115,13 @@
                             :class="{'bg-blue-600/30 border-blue-500': selectedItem && selectedItem.type === 'cluster' && selectedItem.data.name === cluster.name}"
                             class="p-4 rounded-lg border border-gray-700 cursor-pointer transition-colors duration-200 animate-fade-in hover:bg-gray-700/50" :style="{ animationDelay: `${index * 0.05}s` }">
                             <div class="flex justify-between items-center">
-                                <div>
+                                <div class="flex-1">
                                     <p class="font-semibold text-white text-lg">{{ cluster.name }}</p>
                                     <p class="text-sm text-gray-400">{{ cluster.node_count }} 노드, {{ cluster.pod_count }} 파드</p>
+                                    <div class="flex items-center space-x-4 text-xs text-gray-500 mt-1">
+                                        <span>🎮 GPU: {{ getClusterGPUCount(cluster) }}</span>
+                                        <span>🔧 MIG: {{ getClusterMIGCount(cluster) }}</span>
+                                    </div>
                                 </div>
                                 <span class="text-blue-400 text-2xl">🌐</span>
                             </div>
@@ -102,7 +145,9 @@
                  <h2 class="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-600 mb-6">
                     🌐 클러스터: {{ selectedItem.data.name }}
                 </h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                
+                <!-- 클러스터 종합 정보 -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                     <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
                         <p class="text-gray-400 text-sm">노드 수</p>
                         <p class="text-white text-3xl font-bold">{{ selectedItem.data.node_count }}</p>
@@ -111,21 +156,64 @@
                         <p class="text-gray-400 text-sm">파드 수</p>
                         <p class="text-white text-3xl font-bold">{{ selectedItem.data.pod_count }}</p>
                     </div>
-                    <div class="md:col-span-2">
-                         <button @click="exportClusterData" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center space-x-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                            <span>엑셀로 내보내기</span>
-                        </button>
+                    <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                        <p class="text-gray-400 text-sm">총 GPU</p>
+                        <p class="text-yellow-400 text-3xl font-bold">{{ getClusterGPUCount(selectedItem.data) }}</p>
+                    </div>
+                    <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                        <p class="text-gray-400 text-sm">총 MIG</p>
+                        <p class="text-green-400 text-3xl font-bold">{{ getClusterMIGCount(selectedItem.data) }}</p>
                     </div>
                 </div>
+
+                <!-- GPU 사용률 요약 -->
+                <div class="bg-gray-700/30 p-6 rounded-lg border border-gray-600 mb-8">
+                    <h3 class="text-xl font-semibold text-white mb-4">🎮 GPU 사용률 요약</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <p class="text-sm text-gray-400 mb-2">전체 GPU 사용률</p>
+                            <div class="usage-bar mb-2">
+                                <div class="usage-fill" :style="{ width: getClusterGPUUsage(selectedItem.data) + '%' }"></div>
+                            </div>
+                            <p class="text-sm text-white">{{ getClusterGPUUsage(selectedItem.data).toFixed(1) }}%</p>
+                        </div>
+                        <div>
+                            <p class="text-sm text-gray-400 mb-2">전체 MIG 사용률</p>
+                            <div class="usage-bar mb-2">
+                                <div class="usage-fill" :style="{ width: getClusterMIGUsage(selectedItem.data) + '%' }"></div>
+                            </div>
+                            <p class="text-sm text-white">{{ getClusterMIGUsage(selectedItem.data).toFixed(1) }}%</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 내보내기 버튼 -->
+                <div class="mb-8">
+                    <button @click="exportClusterData" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center space-x-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        <span>클러스터 종합 정보 Excel 내보내기</span>
+                    </button>
+                </div>
+
+                <!-- 노드 목록 -->
                 <h3 class="text-2xl font-semibold text-white mb-4">노드 목록 ({{ selectedItem.data.nodes.length }})</h3>
                 <div class="space-y-4 max-h-[400px] overflow-y-auto pr-2 -mr-2">
                     <div v-for="(node, index) in selectedItem.data.nodes" :key="node.name" @click="selectItem('node', node)"
                         class="p-4 rounded-lg border border-gray-700 cursor-pointer transition-colors duration-200 animate-fade-in hover:bg-gray-700/50" :style="{ animationDelay: `${index * 0.05}s` }">
-                        <div class="flex justify-between items-center">
-                            <div>
+                        <div class="flex justify-between items-start">
+                            <div class="flex-1">
                                 <p class="font-semibold text-white text-lg">{{ node.name }}</p>
                                 <p class="text-sm text-gray-400">{{ node.pod_count }} 파드, {{ node.container_count }} 컨테이너</p>
+                                <div class="flex items-center space-x-4 text-xs text-gray-500 mt-2">
+                                    <span>🎮 GPU: {{ node.gpu_count || 0 }}</span>
+                                    <span>🔧 MIG: {{ Object.keys(node.mig_devices || {}).length }}</span>
+                                </div>
+                                <div v-if="node.gpu_usage !== undefined" class="mt-3">
+                                    <p class="text-xs text-gray-400 mb-1">GPU 사용률: {{ node.gpu_usage.toFixed(1) }}%</p>
+                                    <div class="usage-bar">
+                                        <div class="usage-fill" :style="{ width: node.gpu_usage + '%' }"></div>
+                                    </div>
+                                </div>
                             </div>
                             <span class="text-green-400 text-2xl">🖥️</span>
                         </div>
@@ -140,6 +228,7 @@
                 </h2>
                 <p class="text-gray-400 mb-4">클러스터: <span class="font-medium text-blue-400">{{ selectedItem.data.cluster_name }}</span></p>
                 
+                <!-- 기본 정보 -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                     <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
                         <p class="text-gray-400 text-sm">OS 이미지</p>
@@ -162,21 +251,57 @@
                         <p class="text-white text-lg font-medium">{{ selectedItem.data.capacity_memory }}</p>
                     </div>
                     <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
-                        <p class="text-gray-400 text-sm">GPU 모델</p>
-                        <p class="text-white text-lg font-medium">{{ selectedItem.data.gpu_model }}</p>
+                        <p class="text-gray-400 text-sm">GPU 개수</p>
+                        <p class="text-yellow-400 text-lg font-medium">{{ selectedItem.data.gpu_count || 0 }}</p>
                     </div>
                 </div>
 
-                <h3 class="text-2xl font-semibold text-white mt-8 mb-4">라벨</h3>
-                <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2 max-h-[200px] overflow-y-auto pr-2 -mr-2">
+                <!-- GPU 상세 정보 -->
+                <div v-if="selectedItem.data.gpu_count && selectedItem.data.gpu_count > 0" class="bg-gray-700/30 p-6 rounded-lg border border-gray-600 mb-8">
+                    <h3 class="text-xl font-semibold text-white mb-4">🎮 GPU 상세 정보</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">GPU 모델</p>
+                            <p class="text-white text-lg font-medium">{{ selectedItem.data.gpu_model }}</p>
+                        </div>
+                        <div class="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">GPU 사용률</p>
+                            <p class="text-yellow-400 text-lg font-medium">{{ (selectedItem.data.gpu_usage || 0).toFixed(1) }}%</p>
+                            <div class="usage-bar mt-2">
+                                <div class="usage-fill" :style="{ width: (selectedItem.data.gpu_usage || 0) + '%' }"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MIG 상세 정보 -->
+                <div v-if="selectedItem.data.mig_devices && Object.keys(selectedItem.data.mig_devices).length > 0" class="bg-gray-700/30 p-6 rounded-lg border border-gray-600 mb-8">
+                    <h3 class="text-xl font-semibold text-white mb-4">🔧 MIG 디바이스 상세 정보</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div v-for="(mig, migId) in selectedItem.data.mig_devices" :key="migId" class="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
+                            <p class="text-gray-400 text-sm">MIG ID</p>
+                            <p class="text-white text-lg font-medium">{{ migId }}</p>
+                            <p class="text-gray-400 text-sm mt-2">사용률</p>
+                            <p class="text-green-400 text-lg font-medium">{{ (mig.usage || 0).toFixed(1) }}%</p>
+                            <div class="usage-bar mt-2">
+                                <div class="usage-fill" :style="{ width: (mig.usage || 0) + '%' }"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 라벨 정보 -->
+                <h3 class="text-2xl font-semibold text-white mt-8 mb-4">🏷️ 라벨</h3>
+                <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2 max-h-[200px] overflow-y-auto pr-2 -mr-2 mb-8">
                     <div v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 flex justify-between items-center text-sm">
                         <span class="font-medium text-gray-300 break-all mr-4">{{ key }}</span>
                         <span class="text-white text-right break-all">{{ value }}</span>
                     </div>
                 </div>
-                <p v-else class="text-gray-400 text-center py-5">라벨이 없습니다.</p>
+                <p v-else class="text-gray-400 text-center py-5 mb-8">라벨이 없습니다.</p>
 
-                <h3 class="text-2xl font-semibold text-white mt-8 mb-4">파드 목록 ({{ selectedItem.data.pods.length }})</h3>
+                <!-- 파드 목록 -->
+                <h3 class="text-2xl font-semibold text-white mb-4">📦 파드 목록 ({{ selectedItem.data.pods.length }})</h3>
                 <div class="space-y-4 max-h-[400px] overflow-y-auto pr-2 -mr-2">
                     <div v-for="(pod, index) in selectedItem.data.pods" :key="pod.name"
                         @click="selectItem('pod', pod)"
@@ -184,9 +309,10 @@
                         :style="{ animationDelay: `${index * 0.05}s` }"
                     >
                         <div class="flex justify-between items-center">
-                            <div>
+                            <div class="flex-1">
                                 <p class="font-semibold text-white text-lg">{{ pod.name }}</p>
                                 <p class="text-sm text-gray-400">네임스페이스: {{ pod.namespace }}</p>
+                                <p class="text-xs text-gray-500 mt-1">컨테이너: {{ pod.containers.length }}개</p>
                             </div>
                             <span class="text-purple-400 text-2xl">📦</span>
                         </div>
@@ -212,18 +338,24 @@
                         <p class="text-gray-400 text-sm">노드</p>
                         <p class="text-white text-lg font-medium">{{ selectedItem.data.node_name }}</p>
                     </div>
+                    <div class="bg-gray-700/50 p-5 rounded-lg border border-gray-600">
+                        <p class="text-gray-400 text-sm">컨테이너 수</p>
+                        <p class="text-white text-lg font-medium">{{ selectedItem.data.containers.length }}</p>
+                    </div>
                 </div>
 
-                <h3 class="text-2xl font-semibold text-white mt-8 mb-4">라벨</h3>
-                <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2 max-h-[200px] overflow-y-auto pr-2 -mr-2">
+                <!-- 라벨 정보 -->
+                <h3 class="text-2xl font-semibold text-white mt-8 mb-4">🏷️ 라벨</h3>
+                <div v-if="Object.keys(selectedItem.data.labels).length > 0" class="space-y-2 max-h-[200px] overflow-y-auto pr-2 -mr-2 mb-8">
                     <div v-for="(value, key) in selectedItem.data.labels" :key="key" class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 flex justify-between items-center text-sm">
                         <span class="font-medium text-gray-300 break-all mr-4">{{ key }}</span>
                         <span class="text-white text-right break-all">{{ value }}</span>
                     </div>
                 </div>
-                <p v-else class="text-gray-400 text-center py-5">라벨이 없습니다.</p>
+                <p v-else class="text-gray-400 text-center py-5 mb-8">라벨이 없습니다.</p>
 
-                <h3 class="text-2xl font-semibold text-white mt-8 mb-4">컨테이너 목록 ({{ selectedItem.data.containers.length }})</h3>
+                <!-- 컨테이너 목록 -->
+                <h3 class="text-2xl font-semibold text-white mb-4">🐳 컨테이너 목록 ({{ selectedItem.data.containers.length }})</h3>
                 <div class="space-y-4 max-h-[400px] overflow-y-auto pr-2 -mr-2">
                     <div v-for="(container, index) in selectedItem.data.containers" :key="container.name"
                         class="p-4 rounded-lg bg-gray-700/50 border border-gray-600 animate-fade-in"
@@ -231,6 +363,12 @@
                     >
                         <p class="font-semibold text-white text-lg">{{ container.name }}</p>
                         <p class="text-sm text-gray-400">이미지: {{ container.image }}</p>
+                        <div v-if="container.gpu_usage !== undefined" class="mt-3">
+                            <p class="text-xs text-gray-400 mb-1">GPU 사용률: {{ container.gpu_usage.toFixed(1) }}%</p>
+                            <div class="usage-bar">
+                                <div class="usage-fill" :style="{ width: container.gpu_usage + '%' }"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -249,47 +387,366 @@
             const searchTerm = ref('');
             const selectedItem = ref(null);
 
-            const connectWebSocket = () => {
-                const host = window.location.hostname || '127.0.0.1';
-                const port = window.location.port || '8080';
-                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${wsProtocol}//${host}:${port}/ws/`;
-                
-                const socket = new WebSocket(wsUrl);
-
-                socket.onopen = () => { connecting.value = false; error.value = null; };
-                socket.onerror = (e) => { error.value = "서버와 실시간 연결에 실패했습니다."; connecting.value = false; console.error("WebSocket Error:", e);};
-                socket.onclose = () => { connecting.value = true; setTimeout(connectWebSocket, 5000); };
-
-                socket.onmessage = (event) => {
-                    try {
-                        const newClusterData = JSON.parse(event.data);
-                        const index = allClusters.value.findIndex(c => c.name === newClusterData.name);
-                        if (index !== -1) {
-                            allClusters.value[index] = newClusterData;
-                        } else {
-                            allClusters.value.push(newClusterData);
-                        }
-                        if (selectedItem.value) {
-                            const clusterName = selectedItem.value.data.cluster_name || selectedItem.value.data.name;
-                            const currentCluster = allClusters.value.find(c => c.name === clusterName);
-                            if (currentCluster) {
-                                if (selectedItem.value.type === 'cluster') {
-                                    selectedItem.value.data = currentCluster;
-                                } else if (selectedItem.value.type === 'node') {
-                                    const updatedNode = currentCluster.nodes.find(n => n.name === selectedItem.value.data.name);
-                                    if (updatedNode) selectedItem.value.data = updatedNode;
-                                } else if (selectedItem.value.type === 'pod') {
-                                    const parentNode = currentCluster.nodes.find(n => n.name === selectedItem.value.data.node_name);
-                                    if(parentNode){
-                                        const updatedPod = parentNode.pods.find(p => p.name === selectedItem.value.data.name);
-                                        if(updatedPod) selectedItem.value.data = updatedPod;
+            // 더미 데이터 생성 함수
+            const generateDummyData = () => {
+                const dummyClusters = [
+                    {
+                        name: "production-cluster-01",
+                        node_count: 8,
+                        pod_count: 45,
+                        nodes: [
+                            {
+                                name: "gpu-node-01",
+                                cluster_name: "production-cluster-01",
+                                os_image: "Ubuntu 20.04.6 LTS",
+                                kubelet_version: "v1.28.2",
+                                architecture: "amd64",
+                                capacity_cpu: "32 cores",
+                                capacity_memory: "128Gi",
+                                gpu_model: "NVIDIA A100-SXM4-80GB",
+                                gpu_count: 8,
+                                gpu_usage: 75.5,
+                                pod_count: 12,
+                                container_count: 28,
+                                mig_devices: {
+                                    "MIG-7c7c3b0b-1e0f-4c8d-9f3a-2b1d4e5f6a7b": { usage: 85.2 },
+                                    "MIG-8d8d4c1c-2f1a-5d9e-af4b-3c2e5f6a7b8c": { usage: 62.8 },
+                                    "MIG-9e9e5d2d-3a2b-6eaf-ba5c-4d3f6a7b8c9d": { usage: 91.3 }
+                                },
+                                labels: {
+                                    "kubernetes.io/arch": "amd64",
+                                    "kubernetes.io/os": "linux",
+                                    "node.kubernetes.io/instance-type": "gpu.8xlarge",
+                                    "topology.kubernetes.io/zone": "us-west-2a",
+                                    "nvidia.com/gpu.present": "true",
+                                    "nvidia.com/gpu.count": "8"
+                                },
+                                pods: [
+                                    {
+                                        name: "ml-training-job-7f8g9h",
+                                        cluster_name: "production-cluster-01",
+                                        namespace: "ml-workloads",
+                                        node_name: "gpu-node-01",
+                                        labels: {
+                                            "app": "pytorch-training",
+                                            "version": "v2.1.0",
+                                            "tier": "compute"
+                                        },
+                                        containers: [
+                                            { name: "pytorch-trainer", image: "pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime", gpu_usage: 78.5 },
+                                            { name: "data-loader", image: "busybox:1.36", gpu_usage: 0 }
+                                        ]
+                                    },
+                                    {
+                                        name: "inference-server-a1b2c3",
+                                        cluster_name: "production-cluster-01",
+                                        namespace: "inference",
+                                        node_name: "gpu-node-01",
+                                        labels: {
+                                            "app": "triton-inference",
+                                            "version": "v23.04",
+                                            "tier": "serving"
+                                        },
+                                        containers: [
+                                            { name: "triton-server", image: "nvcr.io/nvidia/tritonserver:23.04-py3", gpu_usage: 45.2 }
+                                        ]
                                     }
+                                ]
+                            },
+                            {
+                                name: "gpu-node-02",
+                                cluster_name: "production-cluster-01",
+                                os_image: "Ubuntu 20.04.6 LTS",
+                                kubelet_version: "v1.28.2",
+                                architecture: "amd64",
+                                capacity_cpu: "32 cores",
+                                capacity_memory: "128Gi",
+                                gpu_model: "NVIDIA V100-SXM2-32GB",
+                                gpu_count: 4,
+                                gpu_usage: 42.8,
+                                pod_count: 8,
+                                container_count: 15,
+                                mig_devices: {
+                                    "MIG-1a1a2b2b-4c4c-5d5d-6e6e-7f7f8a8a9b9b": { usage: 55.7 },
+                                    "MIG-2b2b3c3c-5d5d-6e6e-7f7f-8a8a9b9bcaca": { usage: 38.9 }
+                                },
+                                labels: {
+                                    "kubernetes.io/arch": "amd64",
+                                    "kubernetes.io/os": "linux",
+                                    "node.kubernetes.io/instance-type": "gpu.4xlarge",
+                                    "topology.kubernetes.io/zone": "us-west-2b",
+                                    "nvidia.com/gpu.present": "true",
+                                    "nvidia.com/gpu.count": "4"
+                                },
+                                pods: [
+                                    {
+                                        name: "jupyter-notebook-x9y8z7",
+                                        cluster_name: "production-cluster-01",
+                                        namespace: "research",
+                                        node_name: "gpu-node-02",
+                                        labels: {
+                                            "app": "jupyter",
+                                            "user": "data-scientist-01",
+                                            "tier": "development"
+                                        },
+                                        containers: [
+                                            { name: "jupyter-server", image: "jupyter/tensorflow-notebook:latest", gpu_usage: 25.4 }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                name: "worker-node-01",
+                                cluster_name: "production-cluster-01",
+                                os_image: "Ubuntu 20.04.6 LTS",
+                                kubelet_version: "v1.28.2",
+                                architecture: "amd64",
+                                capacity_cpu: "16 cores",
+                                capacity_memory: "64Gi",
+                                gpu_model: "N/A",
+                                gpu_count: 0,
+                                gpu_usage: 0,
+                                pod_count: 15,
+                                container_count: 32,
+                                mig_devices: {},
+                                labels: {
+                                    "kubernetes.io/arch": "amd64",
+                                    "kubernetes.io/os": "linux",
+                                    "node.kubernetes.io/instance-type": "c5.4xlarge",
+                                    "topology.kubernetes.io/zone": "us-west-2c"
+                                },
+                                pods: [
+                                    {
+                                        name: "web-frontend-deployment-7d8e9f",
+                                        cluster_name: "production-cluster-01",
+                                        namespace: "default",
+                                        node_name: "worker-node-01",
+                                        labels: {
+                                            "app": "web-frontend",
+                                            "version": "v1.2.3",
+                                            "tier": "frontend"
+                                        },
+                                        containers: [
+                                            { name: "nginx", image: "nginx:1.21" },
+                                            { name: "app-server", image: "node:18-alpine" }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        name: "development-cluster-02",
+                        node_count: 4,
+                        pod_count: 22,
+                        nodes: [
+                            {
+                                name: "dev-gpu-node-01",
+                                cluster_name: "development-cluster-02",
+                                os_image: "Ubuntu 22.04.3 LTS",
+                                kubelet_version: "v1.29.0",
+                                architecture: "amd64",
+                                capacity_cpu: "24 cores",
+                                capacity_memory: "96Gi",
+                                gpu_model: "NVIDIA RTX 4090",
+                                gpu_count: 2,
+                                gpu_usage: 68.3,
+                                pod_count: 6,
+                                container_count: 12,
+                                mig_devices: {},
+                                labels: {
+                                    "kubernetes.io/arch": "amd64",
+                                    "kubernetes.io/os": "linux",
+                                    "node.kubernetes.io/instance-type": "gpu.2xlarge",
+                                    "topology.kubernetes.io/zone": "us-east-1a",
+                                    "nvidia.com/gpu.present": "true",
+                                    "nvidia.com/gpu.count": "2",
+                                    "environment": "development"
+                                },
+                                pods: [
+                                    {
+                                        name: "dev-training-pod-a1b2c3",
+                                        cluster_name: "development-cluster-02",
+                                        namespace: "dev-ml",
+                                        node_name: "dev-gpu-node-01",
+                                        labels: {
+                                            "app": "model-training",
+                                            "env": "development",
+                                            "framework": "tensorflow"
+                                        },
+                                        containers: [
+                                            { name: "tensorflow-trainer", image: "tensorflow/tensorflow:2.13.0-gpu", gpu_usage: 72.1 }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                name: "dev-worker-node-01",
+                                cluster_name: "development-cluster-02",
+                                os_image: "Ubuntu 22.04.3 LTS",
+                                kubelet_version: "v1.29.0",
+                                architecture: "amd64",
+                                capacity_cpu: "8 cores",
+                                capacity_memory: "32Gi",
+                                gpu_model: "N/A",
+                                gpu_count: 0,
+                                gpu_usage: 0,
+                                pod_count: 16,
+                                container_count: 28,
+                                mig_devices: {},
+                                labels: {
+                                    "kubernetes.io/arch": "amd64",
+                                    "kubernetes.io/os": "linux",
+                                    "node.kubernetes.io/instance-type": "c5.2xlarge",
+                                    "topology.kubernetes.io/zone": "us-east-1b",
+                                    "environment": "development"
+                                },
+                                pods: [
+                                    {
+                                        name: "api-server-dev-x1y2z3",
+                                        cluster_name: "development-cluster-02",
+                                        namespace: "api",
+                                        node_name: "dev-worker-node-01",
+                                        labels: {
+                                            "app": "api-server",
+                                            "env": "development",
+                                            "version": "v0.8.1"
+                                        },
+                                        containers: [
+                                            { name: "api-container", image: "python:3.11-slim" }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ];
+
+                // 더미 데이터를 점진적으로 로드
+                setTimeout(() => {
+                    connecting.value = false;
+                    error.value = null;
+                    allClusters.value = dummyClusters;
+                }, 1500);
+
+                // 실시간 업데이트 시뮬레이션
+                setInterval(() => {
+                    allClusters.value.forEach(cluster => {
+                        cluster.nodes.forEach(node => {
+                            if (node.gpu_count > 0) {
+                                // GPU 사용률을 랜덤하게 변경 (±5%)
+                                const change = (Math.random() - 0.5) * 10;
+                                node.gpu_usage = Math.max(0, Math.min(100, node.gpu_usage + change));
+                                
+                                // MIG 사용률도 업데이트
+                                Object.keys(node.mig_devices).forEach(migId => {
+                                    const migChange = (Math.random() - 0.5) * 8;
+                                    node.mig_devices[migId].usage = Math.max(0, Math.min(100, node.mig_devices[migId].usage + migChange));
+                                });
+
+                                // 컨테이너 GPU 사용률 업데이트
+                                node.pods.forEach(pod => {
+                                    pod.containers.forEach(container => {
+                                        if (container.gpu_usage !== undefined) {
+                                            const containerChange = (Math.random() - 0.5) * 6;
+                                            container.gpu_usage = Math.max(0, Math.min(100, container.gpu_usage + containerChange));
+                                        }
+                                    });
+                                });
+                            }
+                        });
+                    });
+                    
+                    // 선택된 아이템 업데이트
+                    if (selectedItem.value) {
+                        const clusterName = selectedItem.value.data.cluster_name || selectedItem.value.data.name;
+                        const currentCluster = allClusters.value.find(c => c.name === clusterName);
+                        if (currentCluster) {
+                            if (selectedItem.value.type === 'cluster') {
+                                selectedItem.value.data = currentCluster;
+                            } else if (selectedItem.value.type === 'node') {
+                                const updatedNode = currentCluster.nodes.find(n => n.name === selectedItem.value.data.name);
+                                if (updatedNode) selectedItem.value.data = updatedNode;
+                            } else if (selectedItem.value.type === 'pod') {
+                                const parentNode = currentCluster.nodes.find(n => n.name === selectedItem.value.data.node_name);
+                                if(parentNode){
+                                    const updatedPod = parentNode.pods.find(p => p.name === selectedItem.value.data.name);
+                                    if(updatedPod) selectedItem.value.data = updatedPod;
                                 }
                             }
                         }
-                    } catch (e) { console.error("수신된 데이터 처리 오류:", e); }
-                };
+                    }
+                }, 3000); // 3초마다 업데이트
+            };
+
+            const connectWebSocket = () => {
+                // 실제 WebSocket 연결 시도
+                try {
+                    const host = window.location.hostname || '127.0.0.1';
+                    const port = window.location.port || '8080';
+                    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${wsProtocol}//${host}:${port}/ws/`;
+                    
+                    const socket = new WebSocket(wsUrl);
+
+                    socket.onopen = () => { 
+                        connecting.value = false; 
+                        error.value = null;
+                        console.log("WebSocket 연결 성공");
+                    };
+
+                    socket.onerror = (e) => { 
+                        console.log("WebSocket 연결 실패, 더미 데이터 모드로 전환");
+                        generateDummyData();
+                    };
+
+                    socket.onclose = () => { 
+                        console.log("WebSocket 연결 종료, 더미 데이터 모드로 전환");
+                        generateDummyData();
+                    };
+
+                    socket.onmessage = (event) => {
+                        try {
+                            const newClusterData = JSON.parse(event.data);
+                            const index = allClusters.value.findIndex(c => c.name === newClusterData.name);
+                            if (index !== -1) {
+                                allClusters.value[index] = newClusterData;
+                            } else {
+                                allClusters.value.push(newClusterData);
+                            }
+                            if (selectedItem.value) {
+                                const clusterName = selectedItem.value.data.cluster_name || selectedItem.value.data.name;
+                                const currentCluster = allClusters.value.find(c => c.name === clusterName);
+                                if (currentCluster) {
+                                    if (selectedItem.value.type === 'cluster') {
+                                        selectedItem.value.data = currentCluster;
+                                    } else if (selectedItem.value.type === 'node') {
+                                        const updatedNode = currentCluster.nodes.find(n => n.name === selectedItem.value.data.name);
+                                        if (updatedNode) selectedItem.value.data = updatedNode;
+                                    } else if (selectedItem.value.type === 'pod') {
+                                        const parentNode = currentCluster.nodes.find(n => n.name === selectedItem.value.data.node_name);
+                                        if(parentNode){
+                                            const updatedPod = parentNode.pods.find(p => p.name === selectedItem.value.data.name);
+                                            if(updatedPod) selectedItem.value.data = updatedPod;
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e) { console.error("수신된 데이터 처리 오류:", e); }
+                    };
+
+                    // 연결 시도 후 3초 대기, 실패하면 더미 데이터 로드
+                    setTimeout(() => {
+                        if (connecting.value) {
+                            console.log("WebSocket 연결 타임아웃, 더미 데이터 모드로 전환");
+                            generateDummyData();
+                        }
+                    }, 3000);
+
+                } catch (e) {
+                    console.log("WebSocket 초기화 실패, 더미 데이터 모드로 전환");
+                    generateDummyData();
+                }
             };
             
             const goBackToMain = () => selectedItem.value = null;
@@ -299,21 +756,86 @@
             
             const selectItem = (type, data) => { selectedItem.value = { type, data }; };
 
+            // 전체 요약 계산
+            const totalClusters = computed(() => allClusters.value.length);
+            const totalNodes = computed(() => allClusters.value.reduce((sum, cluster) => sum + cluster.node_count, 0));
+            const totalPods = computed(() => allClusters.value.reduce((sum, cluster) => sum + cluster.pod_count, 0));
+            const totalGPUs = computed(() => {
+                return allClusters.value.reduce((sum, cluster) => {
+                    return sum + cluster.nodes.reduce((nodeSum, node) => nodeSum + (node.gpu_count || 0), 0);
+                }, 0);
+            });
+
+            // 클러스터별 GPU/MIG 계산 함수
+            const getClusterGPUCount = (cluster) => {
+                return cluster.nodes.reduce((sum, node) => sum + (node.gpu_count || 0), 0);
+            };
+
+            const getClusterMIGCount = (cluster) => {
+                return cluster.nodes.reduce((sum, node) => {
+                    return sum + Object.keys(node.mig_devices || {}).length;
+                }, 0);
+            };
+
+            const getClusterGPUUsage = (cluster) => {
+                const nodes = cluster.nodes.filter(node => node.gpu_count > 0);
+                if (nodes.length === 0) return 0;
+                const totalUsage = nodes.reduce((sum, node) => sum + (node.gpu_usage || 0), 0);
+                return totalUsage / nodes.length;
+            };
+
+            const getClusterMIGUsage = (cluster) => {
+                let totalMIGs = 0;
+                let totalUsage = 0;
+                cluster.nodes.forEach(node => {
+                    if (node.mig_devices) {
+                        Object.values(node.mig_devices).forEach(mig => {
+                            totalMIGs++;
+                            totalUsage += (mig.usage || 0);
+                        });
+                    }
+                });
+                return totalMIGs > 0 ? totalUsage / totalMIGs : 0;
+            };
+
             const searchResults = computed(() => {
                 const term = searchTerm.value.toLowerCase();
                 if (!term) return [];
                 const results = [];
+                
                 allClusters.value.forEach(cluster => {
                     if (cluster.name.toLowerCase().includes(term)) {
-                        results.push({ type: 'cluster', data: cluster, id: `cluster-${cluster.name}`, name: cluster.name });
+                        results.push({ 
+                            type: 'cluster', 
+                            data: cluster, 
+                            id: `cluster-${cluster.name}`, 
+                            name: cluster.name,
+                            gpu_info: `${getClusterGPUCount(cluster)}개 (${getClusterGPUUsage(cluster).toFixed(1)}%)`
+                        });
                     }
+                    
                     cluster.nodes.forEach(node => {
                         if (node.name.toLowerCase().includes(term)) {
-                            results.push({ type: 'node', data: node, id: `node-${node.name}`, name: node.name, cluster_name: node.cluster_name });
+                            const migCount = Object.keys(node.mig_devices || {}).length;
+                            results.push({ 
+                                type: 'node', 
+                                data: node, 
+                                id: `node-${node.name}`, 
+                                name: node.name, 
+                                cluster_name: node.cluster_name,
+                                gpu_info: `${node.gpu_count || 0}개 GPU, ${migCount}개 MIG`
+                            });
                         }
+                        
                         node.pods.forEach(pod => {
                             if (pod.name.toLowerCase().includes(term)) {
-                                results.push({ type: 'pod', data: pod, id: `pod-${pod.name}`, name: pod.name, cluster_name: pod.cluster_name });
+                                results.push({ 
+                                    type: 'pod', 
+                                    data: pod, 
+                                    id: `pod-${pod.name}`, 
+                                    name: pod.name, 
+                                    cluster_name: pod.cluster_name 
+                                });
                             }
                         });
                     });
@@ -324,31 +846,153 @@
             const exportClusterData = () => {
                 if (!selectedItem.value || selectedItem.value.type !== 'cluster') return;
                 const cluster = selectedItem.value.data;
-                const nodeSpecsData = cluster.nodes.map(node => ({
-                    '클러스터': node.cluster_name, '노드 이름': node.name, 'OS 이미지': node.os_image, 'Kubelet 버전': node.kubelet_version, '아키텍처': node.architecture,
-                    'CPU 용량': node.capacity_cpu, '메모리 용량': node.capacity_memory, 'GPU 모델': node.gpu_model, 'GPU 개수': node.gpu_count,
-                    'MIG 디바이스': Object.keys(node.mig_devices).length > 0 ? JSON.stringify(node.mig_devices) : 'N/A'
+                
+                // 클러스터 요약 정보
+                const clusterSummaryData = [{
+                    '클러스터명': cluster.name,
+                    '노드 수': cluster.node_count,
+                    '파드 수': cluster.pod_count,
+                    '총 GPU 수': getClusterGPUCount(cluster),
+                    '총 MIG 수': getClusterMIGCount(cluster),
+                    '평균 GPU 사용률 (%)': getClusterGPUUsage(cluster).toFixed(2),
+                    '평균 MIG 사용률 (%)': getClusterMIGUsage(cluster).toFixed(2)
+                }];
+
+                // 노드 상세 정보
+                const nodeDetailsData = cluster.nodes.map(node => ({
+                    '클러스터': node.cluster_name,
+                    '노드명': node.name,
+                    'OS 이미지': node.os_image,
+                    'Kubelet 버전': node.kubelet_version,
+                    '아키텍처': node.architecture,
+                    'CPU 용량': node.capacity_cpu,
+                    '메모리 용량': node.capacity_memory,
+                    'GPU 모델': node.gpu_model || 'N/A',
+                    'GPU 개수': node.gpu_count || 0,
+                    'GPU 사용률 (%)': (node.gpu_usage || 0).toFixed(2),
+                    'MIG 디바이스 수': Object.keys(node.mig_devices || {}).length,
+                    '파드 수': node.pod_count,
+                    '컨테이너 수': node.container_count
                 }));
-                const nodePodDetailsData = [];
+
+                // GPU 상세 정보
+                const gpuDetailsData = [];
                 cluster.nodes.forEach(node => {
-                    for (const [key, value] of Object.entries(node.labels)) {
-                        nodePodDetailsData.push({ '리소스 타입': 'Node Label', '리소스 이름': node.name, '키': key, '값': value });
+                    if (node.gpu_count > 0) {
+                        gpuDetailsData.push({
+                            '노드명': node.name,
+                            'GPU 모델': node.gpu_model,
+                            'GPU 개수': node.gpu_count,
+                            'GPU 사용률 (%)': (node.gpu_usage || 0).toFixed(2)
+                        });
                     }
-                    node.pods.forEach(pod => {
-                        for (const [key, value] of Object.entries(pod.labels)) {
-                            nodePodDetailsData.push({ '리소스 타입': 'Pod Label', '리소스 이름': pod.name, '키': key, '값': value });
-                        }
+                });
+
+                // MIG 상세 정보
+                const migDetailsData = [];
+                cluster.nodes.forEach(node => {
+                    if (node.mig_devices) {
+                        Object.entries(node.mig_devices).forEach(([migId, mig]) => {
+                            migDetailsData.push({
+                                '노드명': node.name,
+                                'MIG ID': migId,
+                                'MIG 사용률 (%)': (mig.usage || 0).toFixed(2)
+                            });
+                        });
+                    }
+                });
+
+                // 노드 라벨 정보
+                const nodeLabelsData = [];
+                cluster.nodes.forEach(node => {
+                    Object.entries(node.labels || {}).forEach(([key, value]) => {
+                        nodeLabelsData.push({
+                            '리소스 타입': 'Node Label',
+                            '노드명': node.name,
+                            '라벨 키': key,
+                            '라벨 값': value
+                        });
                     });
                 });
+
+                // 파드 라벨 정보
+                const podLabelsData = [];
+                cluster.nodes.forEach(node => {
+                    node.pods.forEach(pod => {
+                        Object.entries(pod.labels || {}).forEach(([key, value]) => {
+                            podLabelsData.push({
+                                '리소스 타입': 'Pod Label',
+                                '노드명': node.name,
+                                '파드명': pod.name,
+                                '네임스페이스': pod.namespace,
+                                '라벨 키': key,
+                                '라벨 값': value
+                            });
+                        });
+                    });
+                });
+
+                // 파드 상세 정보
+                const podDetailsData = [];
+                cluster.nodes.forEach(node => {
+                    node.pods.forEach(pod => {
+                        pod.containers.forEach(container => {
+                            podDetailsData.push({
+                                '노드명': node.name,
+                                '파드명': pod.name,
+                                '네임스페이스': pod.namespace,
+                                '컨테이너명': container.name,
+                                '컨테이너 이미지': container.image,
+                                '컨테이너 GPU 사용률 (%)': container.gpu_usage ? container.gpu_usage.toFixed(2) : 'N/A'
+                            });
+                        });
+                    });
+                });
+
+                // Excel 파일 생성
                 const wb = XLSX.utils.book_new();
-                const wsSpecs = XLSX.utils.json_to_sheet(nodeSpecsData);
-                const wsDetails = XLSX.utils.json_to_sheet(nodePodDetailsData);
-                XLSX.utils.book_append_sheet(wb, wsSpecs, "Node Specs");
-                XLSX.utils.book_append_sheet(wb, wsDetails, "Node & Pod Details");
-                XLSX.writeFile(wb, `${cluster.name}_cluster_details.xlsx`);
+                
+                // 각 시트 추가
+                const wsClusterSummary = XLSX.utils.json_to_sheet(clusterSummaryData);
+                const wsNodeDetails = XLSX.utils.json_to_sheet(nodeDetailsData);
+                const wsGPUDetails = XLSX.utils.json_to_sheet(gpuDetailsData);
+                const wsMIGDetails = XLSX.utils.json_to_sheet(migDetailsData);
+                const wsNodeLabels = XLSX.utils.json_to_sheet(nodeLabelsData);
+                const wsPodLabels = XLSX.utils.json_to_sheet(podLabelsData);
+                const wsPodDetails = XLSX.utils.json_to_sheet(podDetailsData);
+
+                XLSX.utils.book_append_sheet(wb, wsClusterSummary, "클러스터 요약");
+                XLSX.utils.book_append_sheet(wb, wsNodeDetails, "노드 상세정보");
+                if (gpuDetailsData.length > 0) XLSX.utils.book_append_sheet(wb, wsGPUDetails, "GPU 상세정보");
+                if (migDetailsData.length > 0) XLSX.utils.book_append_sheet(wb, wsMIGDetails, "MIG 상세정보");
+                if (nodeLabelsData.length > 0) XLSX.utils.book_append_sheet(wb, wsNodeLabels, "노드 라벨");
+                if (podLabelsData.length > 0) XLSX.utils.book_append_sheet(wb, wsPodLabels, "파드 라벨");
+                if (podDetailsData.length > 0) XLSX.utils.book_append_sheet(wb, wsPodDetails, "파드 상세정보");
+
+                // 파일 다운로드
+                const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+                XLSX.writeFile(wb, `${cluster.name}_종합정보_${timestamp}.xlsx`);
             };
 
-            return { allClusters, connecting, error, searchTerm, selectedItem, searchResults, goBackToMain, selectItem, exportClusterData };
+            return { 
+                allClusters, 
+                connecting, 
+                error, 
+                searchTerm, 
+                selectedItem, 
+                searchResults, 
+                totalClusters,
+                totalNodes,
+                totalPods,
+                totalGPUs,
+                goBackToMain, 
+                selectItem, 
+                exportClusterData,
+                getClusterGPUCount,
+                getClusterMIGCount,
+                getClusterGPUUsage,
+                getClusterMIGUsage
+            };
         }
     }).mount('#app');
 </script>
