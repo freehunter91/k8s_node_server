@@ -239,6 +239,7 @@ async fn main() -> std::io::Result<()> {
             let mut client_config = Config::from_custom_kubeconfig(kubeconfig_clone, &options).await?;
             
             // 중요: 이 부분에 실제 Keycloak 토큰을 넣거나, 토큰 갱신 로직을 추가해야 합니다.
+            // [수정] String에서 바로 .into()를 호출하여 올바른 SecretBox<str> 타입으로 변환합니다.
             client_config.auth_info.token = Some("여기에_ID_토큰을_붙여넣으세요".into());
             client_config.auth_info.exec = None;
 
