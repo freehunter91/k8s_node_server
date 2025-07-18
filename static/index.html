@@ -300,6 +300,14 @@
                 </div>
                 <p v-else class="text-gray-400 text-center py-5 mb-8">라벨이 없습니다.</p>
 
+                <!-- 내보내기 버튼 -->
+                <div class="mb-8">
+                    <button @click="exportNodeData" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center space-x-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        <span>노드 상세 정보 Excel 내보내기</span>
+                    </button>
+                </div>
+
                 <!-- 파드 목록 -->
                 <h3 class="text-2xl font-semibold text-white mb-4">📦 파드 목록 ({{ selectedItem.data.pods.length }})</h3>
                 <div class="space-y-4 max-h-[400px] overflow-y-auto pr-2 -mr-2">
@@ -974,6 +982,22 @@
                 XLSX.writeFile(wb, `${cluster.name}_종합정보_${timestamp}.xlsx`);
             };
 
+            const exportNodeData = () => {
+                if (!selectedItem.value || selectedItem.value.type !== 'node') return;
+                const node = selectedItem.value.data;
+                
+                // 서버에서 엑셀 파일 다운로드
+                const downloadUrl = `/api/download/excel/${encodeURIComponent(node.cluster_name)}/${encodeURIComponent(node.name)}`;
+                
+                // 새 창에서 다운로드 실행
+                const link = document.createElement('a');
+                link.href = downloadUrl;
+                link.download = `${node.cluster_name}_${node.name}_node_info.xlsx`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
             return { 
                 allClusters, 
                 connecting, 
@@ -988,6 +1012,7 @@
                 goBackToMain, 
                 selectItem, 
                 exportClusterData,
+                exportNodeData,
                 getClusterGPUCount,
                 getClusterMIGCount,
                 getClusterGPUUsage,

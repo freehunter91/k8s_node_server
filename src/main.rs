@@ -11,8 +11,9 @@ mod db;
 mod handlers;
 mod models;
 mod dummy_data;
+mod excel;
 
-use handlers::{ws_index, WsServer};
+use handlers::{ws_index, WsServer, download_node_excel};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -25,15 +26,16 @@ async fn main() -> std::io::Result<()> {
             let server = WsServer::new_with_dummy_data();
             let server_addr = server.start();
             
-            info!("웹 서버를 http://127.0.0.1:8080 에서 시작합니다 (더미 데이터 모드).");
+            info!("웹 서버를 http://127.0.0.1:8081 에서 시작합니다 (더미 데이터 모드).");
             
             HttpServer::new(move || {
                 App::new()
                     .app_data(web::Data::new(server_addr.clone()))
                     .route("/ws/", web::get().to(ws_index))
+                    .route("/api/download/excel/{cluster}/{node}", web::get().to(download_node_excel))
                     .service(fs::Files::new("/", "./static").index_file("index.html"))
             })
-            .bind("127.0.0.1:8080")?
+            .bind("127.0.0.1:8081")?
             .run()
             .await?;
             
@@ -75,12 +77,13 @@ async fn main() -> std::io::Result<()> {
         let server = WsServer::new_with_dummy_data();
         let server_addr = server.start();
         
-        info!("웹 서버를 http://127.0.0.1:8080 에서 시작합니다 (더미 데이터 모드).");
+        info!("웹 서버를 http://127.0.0.1:8081 에서 시작합니다 (더미 데이터 모드).");
         
         HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(server_addr.clone()))
                 .route("/ws/", web::get().to(ws_index))
+                .route("/api/download/excel/{cluster}/{node}", web::get().to(download_node_excel))
                 .service(fs::Files::new("/", "./static").index_file("index.html"))
         })
         .bind("127.0.0.1:8080")?
@@ -93,12 +96,13 @@ async fn main() -> std::io::Result<()> {
     let server = WsServer::new(user_clients);
     let server_addr = server.start();
 
-    info!("웹 서버를 http://127.0.0.1:8080 에서 시작합니다.");
+    info!("웹 서버를 http://127.0.0.1:8081 에서 시작합니다.");
 
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(server_addr.clone()))
             .route("/ws/", web::get().to(ws_index))
+            .route("/api/download/excel/{cluster}/{node}", web::get().to(download_node_excel))
             .service(fs::Files::new("/", "./static").index_file("index.html"))
     })
     .bind("127.0.0.1:8080")?
