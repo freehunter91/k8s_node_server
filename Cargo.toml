@@ -19,7 +19,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 log = "0.4"
 env_logger = "0.11"
-tokio = { version = "1", features = ["full"] }
 secrecy = { version = "0.8", features = ["serde"] }
 futures = "0.3" # 비동기 작업을 한번에 처리하기 위해 추가
 chrono = { version = "0.4", features = ["serde"] }
